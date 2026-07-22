@@ -149,7 +149,7 @@ Pergunta do Usuário: "${pergunta}"
 `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: promptFormatacao,
       config: {
         systemInstruction: PERSONA_DIRETRIZES,
@@ -577,7 +577,7 @@ Contexto da Sessão:
 ${databaseContext}`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
+        model: "gemini-2.5-flash",
         contents: question,
         config: {
           systemInstruction,
@@ -731,7 +731,7 @@ ${historyText}
 Pergunta atual do usuário: "${question}"`;
 
         const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
+          model: "gemini-2.5-flash",
           contents: promptIntent,
           config: {
             systemInstruction: INTENT_SYSTEM_PROMPT,
@@ -984,6 +984,102 @@ Pergunta atual do usuário: "${question}"`;
 app.post("/api/consulta", handleOrchestratedChat);
 app.post("/api/clara/chat", handleOrchestratedChat);
 
+// GOOGLE WORKSPACE CHAT WEBHOOK INTEGRATION (Google Workspace Bot / Hangouts Chat API)
+app.post("/api/google-chat", async (req: Request, res: Response) => {
+  try {
+    const event = req.body;
+    console.log("[Google Workspace Webhook] Evento recebido:", JSON.stringify(event));
+
+    // Handle bot added to space event
+    if (event.type === "ADDED_TO_SPACE") {
+      const spaceType = event.space?.type === "ROOM" ? "espaço" : "conversa";
+      res.json({
+        text: `👋 Olá! Eu sou a **Clara**, a assistente inteligente da **EletroMax Distribuidora**.\n\nFui adicionada a este ${spaceType}! Vocês podem me perguntar sobre estoque, quebras de fornecedores (ex: Tramontina), relatórios de reposição ou curva ABCD.\n\nBasta digitar sua pergunta!`
+      });
+      return;
+    }
+
+    // Handle user message event
+    if (event.type === "MESSAGE") {
+      const userMessage = event.message?.text || "";
+      // Strip @mention prefix if present (e.g., "@Clara qual o estoque...")
+      const cleanQuestion = userMessage.replace(/@\w+/g, "").trim();
+
+      if (!cleanQuestion) {
+        res.json({
+          text: "Olá! Como posso ajudar você hoje com a gestão de estoque ou suprimentos da EletroMax?"
+        });
+        return;
+      }
+
+      // Identify user profile (default to 'compras' unless email is from financeiro)
+      const userEmail = event.message?.sender?.email || "";
+      const profile = userEmail.toLowerCase().includes("financeiro") ? "financeiro" : "compras";
+
+      // Execute internal AI orchestration pipeline
+      const mockReq = {
+        body: {
+          question: cleanQuestion,
+          mensagem: cleanQuestion,
+          profile: profile,
+          perfil: profile
+        }
+      } as Request;
+
+      let responseText = "";
+      let chartUrl = null;
+
+      const mockRes = {
+        json: (data: any) => {
+          responseText = data.text || data.resposta_clara || "Não consegui processar a resposta.";
+          chartUrl = data.chartUrl;
+        }
+      } as Response;
+
+      await handleOrchestratedChat(mockReq, mockRes);
+
+      // Return standard Google Workspace Chat card/text response
+      if (chartUrl) {
+        res.json({
+          text: responseText,
+          cardsV2: [
+            {
+              cardId: "clara_chart_card",
+              card: {
+                header: {
+                  title: "EletroMax AI - Análise Visual",
+                  subtitle: "Gráfico de Tendências e Relatório"
+                },
+                sections: [
+                  {
+                    widgets: [
+                      {
+                        image: {
+                          imageUrl: chartUrl,
+                          altText: "Gráfico de Análise EletroMax"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        });
+      } else {
+        res.json({ text: responseText });
+      }
+      return;
+    }
+
+    // Default response for status check
+    res.json({ text: "Webhook Clara EletroMax AI ativo e operacional." });
+  } catch (error: any) {
+    console.error("[Google Workspace Webhook] Erro ao processar mensagem:", error);
+    res.json({ text: "Ocorreu um erro interno na Clara ao processar sua mensagem do Google Chat." });
+  }
+});
+
 // Serve list of real products & suppliers for UI autocomplete / details helper
 app.get("/api/autocomplete", (req, res) => {
   res.json({
@@ -1009,8 +1105,8 @@ async function startServer() {
     }
   }
 
-  // Serve static dist folder (works for production build on Cloudez)
-  const distPath = path.join(process.cwd(), "dist");
+  // Serve static public folder (works for production build on Cloudez)
+  const distPath = path.join(process.cwd(), "public");
   app.use(express.static(distPath));
   app.get("*", (req, res) => {
     res.sendFile(path.join(distPath, "index.html"));

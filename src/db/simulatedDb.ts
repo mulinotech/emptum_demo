@@ -57,6 +57,7 @@ class SimulatedDatabase {
   public compras: Purchase[] = [];
   public estoque_atual: CurrentStock[] = [];
   public movimentos: Movement[] = [];
+  public historico_vendas: HistoricoVenda[] = [];
 
   constructor() {
     this.seed();
@@ -205,6 +206,34 @@ class SimulatedDatabase {
           data_movimento: emissionDate
         });
       }
+    }
+
+    // 4. Generate 24 months (2 years) of Sales History for predictive analytics (July 2024 to June 2026)
+    let salesHistId = 1;
+    for (let m = 0; m < 24; m++) {
+      const year = 2024 + Math.floor((6 + m) / 12);
+      const month = ((6 + m) % 12) + 1;
+      const monthStr = `${year}-${String(month).padStart(2, '0')}-01`;
+
+      this.produtos.forEach(p => {
+        // Base monthly sales depending on product class
+        let baseSales = 45;
+        if (p.codigo.startsWith('MOT') || p.codigo.startsWith('CLP')) baseSales = 15;
+        else if (p.codigo.startsWith('DIS') || p.codigo.startsWith('CAB')) baseSales = 120;
+        else if (p.codigo.startsWith('LED') || p.codigo.startsWith('INT')) baseSales = 220;
+
+        // Seasonality variation (e.g. higher in Q4)
+        const seasonality = month >= 10 ? 1.3 : 0.9;
+        const randomFactor = 0.8 + ((p.id * 17 + m * 7) % 40) / 100;
+        const qtySold = Math.round(baseSales * seasonality * randomFactor);
+
+        this.historico_vendas.push({
+          id: salesHistId++,
+          id_produto: p.id,
+          mes_ano: monthStr,
+          quantidade_vendida: qtySold
+        });
+      });
     }
 
     // Force presentation data explicitly to perfectly pass acceptance criteria!
