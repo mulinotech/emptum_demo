@@ -1,0 +1,6 @@
+{
+  "name": "EletroMax Distribuidora",
+  "description": "Distribuidora de materiais elétricos, automação e iluminação com bot inteligente integrado para consultas de compras, estoque e quebra de estoque.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
