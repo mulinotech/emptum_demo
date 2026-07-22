@@ -672,7 +672,7 @@ function getAiClient() {
 }
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
-var PORT = 3e3;
+var PORT = process.env.PORT || 3e3;
 var INTENT_SYSTEM_PROMPT = `Voc\xEA \xE9 um extrator de inten\xE7\xE3o especializado em perguntas sobre dados empresariais da EletroMax Distribuidora (material el\xE9trico).
 
 **Objetivo:** Analisar a pergunta do usu\xE1rio e retornar um JSON com a inten\xE7\xE3o e os par\xE2metros extra\xEDdos.
@@ -1574,22 +1574,26 @@ app.get("/api/autocomplete", (req, res) => {
   });
 });
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa"
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = import_path.default.join(process.cwd(), "dist");
-    app.use(import_express.default.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(import_path.default.join(distPath, "index.html"));
-    });
+  const isProduction = process.env.NODE_ENV === "production" || !process.env.VITE_DEV;
+  if (!isProduction) {
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa"
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.log("Vite dev server fallback to static mode");
+    }
   }
+  const distPath = import_path.default.join(process.cwd(), "dist");
+  app.use(import_express.default.static(distPath));
+  app.get("*", (req, res) => {
+    res.sendFile(import_path.default.join(distPath, "index.html"));
+  });
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
   });
 }
 startServer();
