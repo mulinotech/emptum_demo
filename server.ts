@@ -111,6 +111,24 @@ function formatHistoryString(history?: HistoryItem[]): string {
     .join("\n");
 }
 
+async function generateWithTimeout(aiCallPromise: Promise<any>, timeoutMs: number = 5000): Promise<any> {
+  let timeoutId: NodeJS.Timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Timeout de ${timeoutMs}ms atingido na chamada da API Gemini.`));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([aiCallPromise, timeoutPromise]);
+    clearTimeout(timeoutId!);
+    return result;
+  } catch (err) {
+    clearTimeout(timeoutId!);
+    throw err;
+  }
+}
+
 // Format helper using Gemini with Clara Persona (Prompt Mestre Orquestrador)
 async function formatResponseWithAi(
   perfil: string,
@@ -120,6 +138,10 @@ async function formatResponseWithAi(
   history?: HistoryItem[]
 ): Promise<{ text: string; tokenCount: number }> {
   try {
+    const key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+    if (!key) {
+      throw new Error("Chave de API Gemini não configurada.");
+    }
     const ai = getAiClient();
     const historyText = formatHistoryString(history);
 
@@ -148,13 +170,15 @@ Analise os dados acima, identifique quebras (rupturas), excessos de capital para
 Pergunta do Usuário: "${pergunta}"
 `;
 
-    const response = await ai.models.generateContent({
+    const aiPromise = ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: promptFormatacao,
       config: {
         systemInstruction: PERSONA_DIRETRIZES,
       }
     });
+
+    const response = await generateWithTimeout(aiPromise, 5000);
 
     const text = response.text || "Erro ao formatar resposta com Inteligência Artificial.";
     
@@ -165,7 +189,7 @@ Pergunta do Usuário: "${pergunta}"
 
     return { text, tokenCount: totalTokens };
   } catch (error) {
-    console.error("Error in AI formatting:", error);
+    console.warn("⚠️ API Gemini indisponível/lenta ou bloqueada. Ativando resposta determinística de alta performance (Fallback Instantâneo):", error);
     // Return a static fallback formatted template
     return {
       text: formatResponseFallback(intent, data),
@@ -175,55 +199,91 @@ Pergunta do Usuário: "${pergunta}"
 }
 
 function formatResponseFallback(intent: string, data: any): string {
-  let text = `Encontrei os dados que você pediu! Sou a **Clara**, e estruturei o resumo dos números para você:\n\n`;
+  let text = `📊 **Clara - Relatório Analítico EletroMax**\n\nAqui estão os dados consultados diretamente do banco de dados:\n\n`;
   if (intent === "estoque_fornecedor") {
     text += `### Relatório de Estoque e Quebras\n\n`;
-    (data as any[]).forEach(item => {
-      text += `- **${item.nome}** (${item.codigo}):\n`;
-      text += `  - Total Entrado (Compras): ${item.total_entrado} ${item.unidade}\n`;
-      text += `  - Saldo Atual em Estoque: ${item.saldo} ${item.unidade}\n`;
-      text += `  - Quebra de Estoque: ${item.quebra} ${item.unidade} (**${item.percentual_quebra}%**)\n`;
-      if (item.alerta) {
-        text += `  - ⚠️ **Atenção**: Identifiquei que a quebra está em ${item.percentual_quebra}%, acima do nosso limite recomendado de 10%!\n`;
-      }
-      text += `\n`;
-    });
+    if (Array.isArray(data)) {
+      (data as any[]).forEach(item => {
+        const nome = item.nome || item.produto || item.codigo || "Produto";
+        const codigo = item.codigo || "N/A";
+        const unidade = item.unidade || "un";
+        const totalEntrado = item.total_entrado ?? item.venda_media_mensal_ultimos_24m ?? "N/A";
+        const saldo = item.saldo ?? item.estoque_atual_unidades ?? item.estoque_atual ?? "N/A";
+        const quebra = item.quebra ?? "N/A";
+        const percentualQuebra = item.percentual_quebra ?? "N/A";
+
+        text += `- **${nome}** (${codigo}):\n`;
+        text += `  - Total Entrado (Compras): ${totalEntrado} ${unidade}\n`;
+        text += `  - Saldo Atual em Estoque: ${saldo} ${unidade}\n`;
+        if (quebra !== "N/A") {
+          text += `  - Quebra de Estoque: ${quebra} ${unidade} (**${percentualQuebra}%**)\n`;
+        }
+        if (item.meta_estoque_unidades) {
+          text += `  - Meta de Estoque (Classe ${item.classe_curva || "?"}): ${item.meta_estoque_unidades} ${unidade}\n`;
+        }
+        if (item.sugestao_compra_emergencial && item.sugestao_compra_emergencial > 0) {
+          text += `  - 🛒 Sugestão de Compra Emergencial: ${item.sugestao_compra_emergencial} ${unidade}\n`;
+        }
+        if (item.status === "RISCO_CRITICO_RUPTURA") {
+          text += `  - 🚨 **ALERTA CRÍTICO**: Estoque muito abaixo da meta! Risco imediato de ruptura.\n`;
+        }
+        if (item.alerta) {
+          text += `  - ⚠️ **Atenção**: Quebra acima do limite recomendado de 10%!\n`;
+        }
+        text += `\n`;
+      });
+    }
     text += `\nQuer ver esse mesmo dado para outro fornecedor ou detalhar os itens com maior quebra?`;
   } else if (intent === "participacao_fornecedor") {
-    text += `### Participação do Grupo Fornecedor: **${data.nome_grupo}**\n\n`;
-    text += `Total comprado do grupo no período: **R$ ${data.total_grupo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**\n\n`;
+    const nomeGrupo = data.nome_grupo || "Grupo";
+    const totalGrupo = data.total_grupo || 0;
+    text += `### Participação do Grupo Fornecedor: **${nomeGrupo}**\n\n`;
+    text += `Total comprado do grupo no período: **R$ ${totalGrupo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**\n\n`;
     text += `Detalhamento por CNPJ:\n`;
-    (data.fornecedores as any[]).forEach(f => {
-      text += `- **${f.nome_fantasia}** (CNPJ: ${f.cnpj}): R$ ${f.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n`;
-    });
+    if (data.fornecedores && Array.isArray(data.fornecedores)) {
+      (data.fornecedores as any[]).forEach(f => {
+        const total = f.total || 0;
+        text += `- **${f.nome_fantasia}** (CNPJ: ${f.cnpj}): R$ ${total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n`;
+      });
+    }
     text += `\nPosso comparar a participação com outros fornecedores do nosso catálogo se desejar!`;
   } else if (intent === "comparacao_periodo") {
-    text += `### Comparação de Compras - Produto: **${data.nome_produto}**\n\n`;
-    text += `- Período 1 (${data.periodo1.mes}/${data.periodo1.ano}): ${data.periodo1.quantidade} un (Total: R$ ${data.periodo1.valor_total.toLocaleString('pt-BR')})\n`;
-    text += `- Período 2 (${data.periodo2.mes}/${data.periodo2.ano}): ${data.periodo2.quantidade} un (Total: R$ ${data.periodo2.valor_total.toLocaleString('pt-BR')})\n`;
-    const varQty = data.variacao_quantidade_pct;
-    text += `- **Variação de volume**: ${varQty >= 0 ? '+' : ''}${varQty}%\n\n`;
+    const nomeProduto = data.nome_produto || data.nome || "Produto";
+    text += `### Comparação de Compras - Produto: **${nomeProduto}**\n\n`;
+    if (data.periodo1 && data.periodo2) {
+      text += `- Período 1 (${data.periodo1.mes}/${data.periodo1.ano}): ${data.periodo1.quantidade} un (Total: R$ ${data.periodo1.valor_total?.toLocaleString('pt-BR') || 'N/A'})\n`;
+      text += `- Período 2 (${data.periodo2.mes}/${data.periodo2.ano}): ${data.periodo2.quantidade} un (Total: R$ ${data.periodo2.valor_total?.toLocaleString('pt-BR') || 'N/A'})\n`;
+      const varQty = data.variacao_quantidade_pct ?? 0;
+      text += `- **Variação de volume**: ${varQty >= 0 ? '+' : ''}${varQty}%\n\n`;
+    }
     text += `Gostaria de analisar outro período ou produto do mesmo fornecedor?`;
   } else if (intent === "margem") {
     if (data.tipo === 'produto') {
-      text += `### Análise de Margem - Produto: **${data.nome}**\n\n`;
-      text += `- Preço de Venda: R$ ${data.preco_venda.toFixed(2)}\n`;
-      text += `- Custo Médio de Aquisição: R$ ${data.custo_medio.toFixed(2)}\n`;
-      text += `- Margem de Lucro Bruta: R$ ${data.margem_valor.toFixed(2)} (**${data.margem_pct}%**)\n\n`;
+      const nome = data.nome || data.produto || "Produto";
+      const precoVenda = data.preco_venda ?? data.preco_venda_praticado ?? 0;
+      const custoMedio = data.custo_medio ?? data.custo_aquisicao ?? 0;
+      const margemValor = data.margem_valor ?? 0;
+      const margemPct = data.margem_pct ?? data.margem_lucro_bruta ?? 0;
+
+      text += `### Análise de Margem - Produto: **${nome}**\n\n`;
+      text += `- Preço de Venda: R$ ${typeof precoVenda === 'number' ? precoVenda.toFixed(2) : precoVenda}\n`;
+      text += `- Custo Médio de Aquisição: R$ ${typeof custoMedio === 'number' ? custoMedio.toFixed(2) : custoMedio}\n`;
+      text += `- Margem de Lucro Bruta: R$ ${typeof margemValor === 'number' ? margemValor.toFixed(2) : margemValor} (**${margemPct}%**)\n\n`;
     } else {
-      text += `### Análise de Margem - Fornecedor: **${data.nome}**\n\n`;
-      text += `- Total Comprado: R$ ${data.custo_total.toLocaleString('pt-BR')}\n`;
-      text += `- Valor de Venda Estimado: R$ ${data.venda_total.toLocaleString('pt-BR')}\n`;
-      text += `- Margem Média Ponderada: R$ ${data.margem_valor.toLocaleString('pt-BR')} (**${data.margem_pct}%**)\n\n`;
+      const nome = data.nome || "Fornecedor";
+      text += `### Análise de Margem - Fornecedor: **${nome}**\n\n`;
+      text += `- Total Comprado: R$ ${(data.custo_total || 0).toLocaleString('pt-BR')}\n`;
+      text += `- Valor de Venda Estimado: R$ ${(data.venda_total || 0).toLocaleString('pt-BR')}\n`;
+      text += `- Margem Média Ponderada: R$ ${(data.margem_valor || 0).toLocaleString('pt-BR')} (**${data.margem_pct || 0}%**)\n\n`;
     }
     text += `Deseja verificar a margem de outro produto ou fornecedor da EletroMax?`;
   } else if (intent === "relatorio_reposicao") {
     text += `### 📋 Relatório Matinal de Reposição & Análise Curva ABCD\n\n`;
-    text += `Analisamos **${data.total_produtos_analisados} produtos** do nosso catálogo:\n`;
-    text += `- 🚨 **Itens em Risco de Ruptura**: ${data.itens_risco_ruptura_total}\n`;
-    text += `- 📦 **Itens com Excesso de Estoque**: ${data.itens_excesso_total}\n\n`;
+    text += `Analisamos **${data.total_produtos_analisados || 0} produtos** do nosso catálogo:\n`;
+    text += `- 🚨 **Itens em Risco de Ruptura**: ${data.itens_risco_ruptura_total || 0}\n`;
+    text += `- 📦 **Itens com Excesso de Estoque**: ${data.itens_excesso_total || 0}\n\n`;
     
-    if (data.pedidos_automaticos_classe_a.length > 0) {
+    if (data.pedidos_automaticos_classe_a && data.pedidos_automaticos_classe_a.length > 0) {
       text += `#### ⚡ Pedidos Automáticos Emitidos (Classe A - Meta 6 Meses)\n`;
       (data.pedidos_automaticos_classe_a as any[]).forEach(item => {
         text += `- **${item.nome}** (${item.codigo}): Estoque atual de ${item.estoque_atual} un está abaixo do Ponto de Reposição (${item.ponto_reposicao} un).\n  *${item.acao_mensagem}*\n`;
@@ -231,7 +291,7 @@ function formatResponseFallback(intent: string, data: any): string {
       text += `\n`;
     }
 
-    if (data.pedidos_pendentes_aprovacao_bcd.length > 0) {
+    if (data.pedidos_pendentes_aprovacao_bcd && data.pedidos_pendentes_aprovacao_bcd.length > 0) {
       text += `#### 🛒 Pedidos Pendentes de Aprovação Humana (Classes B, C e D)\n`;
       (data.pedidos_pendentes_aprovacao_bcd as any[]).forEach(item => {
         text += `- **${item.nome}** (Classe ${item.classe} | Código: ${item.codigo}): Estoque de ${item.estoque_atual} un (Ponto Reposição: ${item.ponto_reposicao} un). Sugestão de Compra: ${item.sugestao_compra_qtd} un.\n  *${item.acao_mensagem}*\n`;
@@ -721,7 +781,7 @@ const handleOrchestratedChat = async (req: Request, res: Response) => {
     let intentResult = null;
     let extractionTokens = 0;
 
-    if (process.env.GEMINI_API_KEY) {
+    if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
       try {
         const ai = getAiClient();
         const historyText = formatHistoryString(history);
@@ -730,7 +790,7 @@ ${historyText}
 
 Pergunta atual do usuário: "${question}"`;
 
-        const response = await ai.models.generateContent({
+        const aiIntentPromise = ai.models.generateContent({
           model: "gemini-2.5-flash",
           contents: promptIntent,
           config: {
@@ -739,11 +799,13 @@ Pergunta atual do usuário: "${question}"`;
           }
         });
 
+        const response = await generateWithTimeout(aiIntentPromise, 3500);
+
         const textOutput = response.text || "{}";
         intentResult = JSON.parse(textOutput.trim());
         extractionTokens = Math.ceil((INTENT_SYSTEM_PROMPT.length + promptIntent.length + textOutput.length) / 4);
       } catch (err) {
-        console.warn("AI intent extraction failed, falling back to deterministic extraction:", err);
+        console.warn("⚠️ Intent extraction via Gemini excedeu tempo limite ou falhou. Usando algoritmo determinístico instantâneo.");
       }
     }
 
@@ -1085,6 +1147,43 @@ app.get("/api/autocomplete", (req, res) => {
   res.json({
     produtos: db.produtos.map(p => ({ id: p.id, codigo: p.codigo, nome: p.nome, categoria: p.categoria })),
     fornecedores: db.fornecedores.map(f => ({ id: f.id, nome_fantasia: f.nome_fantasia, razao_social: f.razao_social, cnpj: f.cnpj }))
+  });
+});
+
+// Endpoint dedicado para consultar o Histórico Fictício de Vendas dos últimos 24 meses
+app.get("/api/historico-vendas", (req, res) => {
+  const produtoId = req.query.produto_id ? Number(req.query.produto_id) : undefined;
+  const codigo = req.query.codigo ? String(req.query.codigo).toUpperCase() : undefined;
+
+  let filtrado = db.historico_vendas;
+
+  if (produtoId) {
+    filtrado = filtrado.filter(h => h.id_produto === produtoId);
+  } else if (codigo) {
+    const prod = db.produtos.find(p => p.codigo === codigo);
+    if (prod) {
+      filtrado = filtrado.filter(h => h.id_produto === prod.id);
+    }
+  }
+
+  const historicoComDetalhes = filtrado.map(h => {
+    const prod = db.produtos.find(p => p.id === h.id_produto);
+    return {
+      ...h,
+      codigo_produto: prod?.codigo || "N/A",
+      nome_produto: prod?.nome || "N/A",
+      categoria: prod?.categoria || "N/A"
+    };
+  });
+
+  const totalRegistros = historicoComDetalhes.length;
+  const totalVolumeVendido = historicoComDetalhes.reduce((sum, item) => sum + item.quantidade_vendida, 0);
+
+  res.json({
+    periodo_cobertura: "Julho/2024 a Junho/2026 (24 Meses)",
+    total_registros: totalRegistros,
+    total_volume_vendido_unidades: totalVolumeVendido,
+    historico: historicoComDetalhes
   });
 });
 

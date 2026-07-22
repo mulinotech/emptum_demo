@@ -360,14 +360,21 @@ class SimulatedDatabase {
   public queryEstoqueFornecedor(fornecedor_id: number, periodo: string) {
     if (fornecedor_id === 1 || fornecedor_id === 2) {
       // Cenário de Ouro de Crise de Supply Chain (Tramontina SP - Linha Liz)
+      // Fields match the standard format used by formatResponseFallback AND formatResponseWithAi
       return [
         {
+          produto_id: 901,
           fornecedor: "Tramontina Comercial Ltda SP",
-          produto: "Interruptor Simples 10A - Linha Liz",
+          nome: "Interruptor Simples 10A - Linha Liz",
           codigo: "INT-LIZ-01",
+          categoria: "Dispositivos",
+          unidade: "un",
           classe_curva: "C",
           venda_media_mensal_ultimos_24m: 3000,
-          estoque_atual_unidades: 1500,
+          total_entrado: 4500,
+          saldo: 1500,
+          quebra: 3000,
+          percentual_quebra: 66.7,
           pedidos_em_transito: 0,
           lead_time_dias: 20,
           meta_meses: 3,
@@ -378,12 +385,18 @@ class SimulatedDatabase {
           alerta: true
         },
         {
+          produto_id: 902,
           fornecedor: "Tramontina Comercial Ltda SP",
-          produto: "Tomada Dupla 20A - Linha Liz",
+          nome: "Tomada Dupla 20A - Linha Liz",
           codigo: "TOM-LIZ-02",
+          categoria: "Dispositivos",
+          unidade: "un",
           classe_curva: "B",
           venda_media_mensal_ultimos_24m: 1200,
-          estoque_atual_unidades: 5000,
+          total_entrado: 5000,
+          saldo: 5000,
+          quebra: 0,
+          percentual_quebra: 0,
           pedidos_em_transito: 0,
           lead_time_dias: 20,
           meta_meses: 4,
@@ -574,13 +587,14 @@ class SimulatedDatabase {
       // Force exact golden scenario values for Motor WEG 5CV
       if (product.codigo === "MOT-002" || product.nome.toLowerCase().includes("motor")) {
         return {
-          produto: "Motor Elétrico WEG 5CV Trifásico",
+          tipo: 'produto',
+          id: filterId,
+          nome: "Motor Elétrico 5CV Trifásico",
           codigo: "MOT-002",
-          custo_aquisicao: "R$ 1.200,00",
-          preco_venda_praticado: "R$ 1.850,00",
-          margem_lucro_bruta: "35,1%",
-          impostos_estimados: "12%",
-          status: "RENTABILIDADE_SAUDAVEL"
+          custo_medio: 1200.00,
+          preco_venda: 1850.00,
+          margem_valor: 650.00,
+          margem_pct: 35.1
         };
       }
 
