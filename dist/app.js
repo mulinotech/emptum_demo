@@ -672,7 +672,7 @@ function getAiClient() {
 }
 var app = (0, import_express.default)();
 app.use(import_express.default.json());
-var PORT = process.env.PORT || 3e3;
+var PORT = Number(process.env.PORT) || 3e3;
 var INTENT_SYSTEM_PROMPT = `Voc\xEA \xE9 um extrator de inten\xE7\xE3o especializado em perguntas sobre dados empresariais da EletroMax Distribuidora (material el\xE9trico).
 
 **Objetivo:** Analisar a pergunta do usu\xE1rio e retornar um JSON com a inten\xE7\xE3o e os par\xE2metros extra\xEDdos.

@@ -31,7 +31,7 @@ function getAiClient(): GoogleGenAI {
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // SYSTEM PROMPTS
 const INTENT_SYSTEM_PROMPT = `Você é um extrator de intenção especializado em perguntas sobre dados empresariais da EletroMax Distribuidora (material elétrico).
