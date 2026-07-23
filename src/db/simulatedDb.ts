@@ -50,6 +50,10 @@ export interface Purchase { id: number; fornecedor_id: number; produto_id: numbe
 export interface CurrentStock { produto_id: number; filial: 'SP' | 'RJ' | 'MG'; saldo_quantidade: number; ultima_atualizacao: string; }
 export interface Movement { id: number; produto_id: number; tipo: 'entrada' | 'saida'; quantidade: number; data_movimento: string; }
 
+export interface ChamadoITSM { id: string; solicitante: string; descricao: string; status: 'ABERTO' | 'EM_ANDAMENTO' | 'RESOLVIDO'; data_abertura: string; }
+export interface Funcionario { id: number; nome: string; departamento: string; }
+export interface ConsumoEPI { id: number; funcionario_id: number; produto_id: number; quantidade: number; data_consumo: string; }
+
 // Global database state
 class SimulatedDatabase {
   public produtos: Product[] = [];
@@ -58,6 +62,9 @@ class SimulatedDatabase {
   public estoque_atual: CurrentStock[] = [];
   public movimentos: Movement[] = [];
   public historico_vendas: HistoricoVenda[] = [];
+  public chamados: ChamadoITSM[] = [];
+  public funcionarios: Funcionario[] = [];
+  public consumos_epi: ConsumoEPI[] = [];
 
   constructor() {
     this.seed();
@@ -134,7 +141,25 @@ class SimulatedDatabase {
       { codigo: 'DIM-001', nome: 'Dimmer 500W 220V', categoria: 'Dispositivos', unidade: 'un', baseCusto: 28.00 },
       { codigo: 'SIR-001', nome: 'Sirene Eletrônica 110dB', categoria: 'Sinalização', unidade: 'un', baseCusto: 34.00 },
       { codigo: 'SIR-002', nome: 'Sirene Rotativa 12V', categoria: 'Sinalização', unidade: 'un', baseCusto: 42.50 },
-      { codigo: 'EST-001', nome: 'Estabilizador 500VA', categoria: 'Estabilizadores', unidade: 'un', baseCusto: 110.00 }
+      { codigo: 'EST-001', nome: 'Estabilizador 500VA', categoria: 'Estabilizadores', unidade: 'un', baseCusto: 110.00 },
+      // EPIs para Cliente 2
+      { codigo: 'EPI-001', nome: 'Capacete de Segurança Classe B', categoria: 'EPI', unidade: 'un', baseCusto: 15.00 },
+      { codigo: 'EPI-002', nome: 'Luva de Raspa', categoria: 'EPI', unidade: 'par', baseCusto: 8.50 },
+      { codigo: 'EPI-003', nome: 'Óculos de Proteção Incolor', categoria: 'EPI', unidade: 'un', baseCusto: 4.50 },
+      { codigo: 'EPI-004', nome: 'Botina de Segurança Bico PVC', categoria: 'EPI', unidade: 'par', baseCusto: 45.00 }
+    ];
+
+    // ITSM Chamados
+    this.chamados = [
+      { id: 'TI-001', solicitante: 'João (Vendas)', descricao: 'Impressora não conecta', status: 'RESOLVIDO', data_abertura: '2026-07-10' },
+      { id: 'TI-002', solicitante: 'Maria (Financeiro)', descricao: 'Sem acesso ao ERP', status: 'EM_ANDAMENTO', data_abertura: '2026-07-22' }
+    ];
+
+    // Funcionários
+    this.funcionarios = [
+      { id: 1, nome: 'João Pedro', departamento: 'Logística' },
+      { id: 2, nome: 'Ana Maria', departamento: 'Operações' },
+      { id: 3, nome: 'Carlos Silva', departamento: 'Manutenção' }
     ];
 
     // Map baseProducts to full Product records with markup and Supply Chain metrics
@@ -352,6 +377,46 @@ class SimulatedDatabase {
           ultima_atualizacao: "2026-07-20 10:15:00"
         });
       }
+    });
+
+    // Generate Consumo EPI for last month
+    const epis = this.produtos.filter(p => p.categoria === 'EPI');
+    let consumoId = 1;
+    this.funcionarios.forEach(func => {
+      epis.forEach(epi => {
+        const qty = epi.codigo === 'EPI-002' ? 4 : 1; // 4 luvas por mes, 1 capacete etc
+        this.consumos_epi.push({
+          id: consumoId++,
+          funcionario_id: func.id,
+          produto_id: epi.id,
+          quantidade: Math.floor(Math.random() * qty) + 1,
+          data_consumo: "2026-07-10"
+        });
+      });
+    });
+
+    // Populate Historico de Vendas for the last 6 months (Feb - Jul 2026)
+    const meses = ["2026-02-01", "2026-03-01", "2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01"];
+    let histId = 1;
+    // We will simulate sales for a few top products to have a nice chart
+    const topProdutos = this.produtos.slice(0, 5); // Take top 5 products
+
+    meses.forEach((mes, idx) => {
+      // Simulate an increasing trend generally
+      const baseTrend = 1 + (idx * 0.1); 
+      
+      topProdutos.forEach(p => {
+        // Random variance between 0.8 and 1.2
+        const variance = 0.8 + (Math.random() * 0.4);
+        const qtyVendida = Math.floor(200 * baseTrend * variance);
+        
+        this.historico_vendas.push({
+          id: histId++,
+          id_produto: p.id,
+          mes_ano: mes,
+          quantidade_vendida: qtyVendida
+        });
+      });
     });
   }
 
@@ -765,6 +830,111 @@ class SimulatedDatabase {
       itens_excesso: excesso,
       todos_itens: relatorio
     };
+  }
+
+  // QUERY 6: ITSM Status do Chamado
+  public queryStatusChamado(id_ou_texto: string) {
+    if (!id_ou_texto) return this.chamados; // retorna todos
+    const match = this.chamados.find(c => c.id.toLowerCase() === id_ou_texto.toLowerCase() || id_ou_texto.includes(c.id.toLowerCase()));
+    if (match) return [match];
+    return this.chamados.filter(c => c.status !== 'RESOLVIDO'); // se não encontrar, retorna os pendentes
+  }
+
+  // QUERY 7: ITSM Abrir Chamado
+  public abrirChamado(solicitante: string, descricao: string) {
+    const newId = `TI-${String(this.chamados.length + 1).padStart(3, '0')}`;
+    const novoChamado: ChamadoITSM = {
+      id: newId,
+      solicitante: solicitante || "Usuário do Chat",
+      descricao: descricao,
+      status: 'ABERTO',
+      data_abertura: new Date().toISOString().split('T')[0]
+    };
+    this.chamados.push(novoChamado);
+    return novoChamado;
+  }
+
+  // QUERY 8: Consultar Estoque de EPI
+  public queryEstoqueEPI(nomeEPI?: string) {
+    let epis = this.produtos.filter(p => p.categoria === 'EPI');
+    if (nomeEPI) {
+      const term = nomeEPI.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      epis = epis.filter(e => e.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(term));
+    }
+    
+    return epis.map(epi => {
+      const stockRecords = this.estoque_atual.filter(e => e.produto_id === epi.id);
+      const saldo = stockRecords.reduce((sum, e) => sum + e.saldo_quantidade, 0);
+      const pontoReposicao = 20; // Fictício
+      const ruptura = saldo <= pontoReposicao;
+      return {
+        nome: epi.nome,
+        codigo: epi.codigo,
+        saldo: saldo,
+        ponto_reposicao: pontoReposicao,
+        ruptura: ruptura,
+        unidade: epi.unidade
+      };
+    });
+  }
+
+  // QUERY 9: Relatório de Consumo de EPI por Funcionário
+  public queryConsumoFuncionario(nomeFuncionario?: string) {
+    let funcs = this.funcionarios;
+    if (nomeFuncionario) {
+      const term = nomeFuncionario.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      funcs = funcs.filter(f => f.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(term));
+    }
+    
+    return funcs.map(func => {
+      const consumos = this.consumos_epi.filter(c => c.funcionario_id === func.id);
+      const detalhes = consumos.map(c => {
+        const epi = this.produtos.find(p => p.id === c.produto_id)!;
+        return {
+          epi: epi.nome,
+          quantidade: c.quantidade,
+          data: c.data_consumo
+        };
+      });
+      return {
+        funcionario: func.nome,
+        departamento: func.departamento,
+        total_itens: consumos.reduce((sum, c) => sum + c.quantidade, 0),
+        detalhes: detalhes
+      };
+    });
+  }
+
+  // QUERY 10: Histórico Agregado de Vendas Mensal (Receita e Volume)
+  public queryHistoricoVendas() {
+    // Group by mes_ano
+    const grouped = this.historico_vendas.reduce((acc, venda) => {
+      const prod = this.produtos.find(p => p.id === venda.id_produto);
+      if (!prod) return acc;
+      
+      const receita = venda.quantidade_vendida * prod.preco_venda;
+      
+      if (!acc[venda.mes_ano]) {
+        acc[venda.mes_ano] = { mes_ano: venda.mes_ano, volume_total: 0, receita_total: 0 };
+      }
+      acc[venda.mes_ano].volume_total += venda.quantidade_vendida;
+      acc[venda.mes_ano].receita_total += receita;
+      return acc;
+    }, {} as Record<string, { mes_ano: string; volume_total: number; receita_total: number; }>);
+
+    // Convert object to array and sort by date
+    const sorted = Object.values(grouped).sort((a, b) => new Date(a.mes_ano).getTime() - new Date(b.mes_ano).getTime());
+    
+    // Format month for display (e.g., "2026-02-01" -> "Fev/26")
+    return sorted.map(item => {
+      const date = new Date(item.mes_ano);
+      const mesName = date.toLocaleString('pt-BR', { month: 'short' });
+      const anoShort = date.getFullYear().toString().substring(2);
+      return {
+        ...item,
+        mes_formatado: `${mesName.charAt(0).toUpperCase() + mesName.slice(1)}/${anoShort}`
+      };
+    });
   }
 }
 

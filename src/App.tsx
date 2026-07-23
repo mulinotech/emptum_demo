@@ -32,6 +32,7 @@ import {
   Moon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Line } from "recharts";
 
 interface Message {
   id: string;
@@ -56,6 +57,19 @@ export default function App() {
   const [themeMode, setThemeMode] = useState<"dark" | "light">(() => {
     return (localStorage.getItem("emptum_theme") as "dark" | "light") || "dark";
   });
+  
+  const [salesData, setSalesData] = useState<any[]>([]);
+  const [isAlertModalOpen, setIsAlertModalOpen] = useState(false);
+  const [activeScopeInfo, setActiveScopeInfo] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/vendas")
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) setSalesData(data);
+      })
+      .catch(e => console.error("Erro ao carregar vendas:", e));
+  }, []);
 
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
@@ -562,7 +576,12 @@ export default function App() {
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-amber-500" />
             <span className={isDark ? "text-slate-400" : "text-slate-600"}>Quebras Mapeadas:</span>
-            <span className="font-semibold text-amber-500">{totalAlertas > 0 ? `${totalAlertas} Alerta(s)` : "Tramontina Monitorada"}</span>
+            <button 
+              onClick={() => setIsAlertModalOpen(true)}
+              className="font-semibold text-amber-500 hover:text-amber-400 transition-colors cursor-pointer underline decoration-amber-500/30 underline-offset-4"
+            >
+              {totalAlertas > 0 ? `${totalAlertas} Alerta(s) - Ver Detalhes` : "Tramontina Monitorada - Ver Detalhes"}
+            </button>
           </div>
         </div>
 
@@ -795,6 +814,89 @@ export default function App() {
                 </div>
               </div>
 
+              {/* ACTIVE SCOPE INFO (INTERATIVO DA SIDEBAR) */}
+              <AnimatePresence>
+                {selectedPermission && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    className={`p-5 rounded-2xl border shadow-sm ${
+                      isDark ? "bg-slate-900/60 border-slate-800/80" : "bg-white border-slate-200"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className={`p-2.5 rounded-xl ${
+                        selectedPermission === "estoque" ? "bg-blue-500/10 text-blue-500" :
+                        selectedPermission === "giro" ? "bg-emerald-500/10 text-emerald-500" :
+                        "bg-amber-500/10 text-amber-500"
+                      }`}>
+                        {selectedPermission === "estoque" && <Package className="w-5 h-5" />}
+                        {selectedPermission === "giro" && <Activity className="w-5 h-5" />}
+                        {selectedPermission === "participacao_ou_margem" && <DollarSign className="w-5 h-5" />}
+                      </div>
+                      <div>
+                        <h4 className={`text-sm font-bold mb-1 ${isDark ? "text-slate-200" : "text-slate-900"}`}>
+                          {selectedPermission === "estoque" && "Escopo 1: Estoque & Entradas (Visão Geral)"}
+                          {selectedPermission === "giro" && "Escopo 2: Giro & Curva ABCD (Inteligência Analítica)"}
+                          {selectedPermission === "participacao_ou_margem" && (profile === "compras" ? "Escopo 3: Participação CNPJs" : "Escopo 3: Margem Financeira (Restrito)")}
+                        </h4>
+                        <p className={`text-xs leading-relaxed ${isDark ? "text-slate-400" : "text-slate-600"}`}>
+                          {selectedPermission === "estoque" && "Neste escopo, as regras de negócio focam em reposição de emergência (Shrinkage). A Clara monitora diariamente as entradas contra o saldo em estoque, alertando caso a discrepância supere o baseline (ex: Grupo Tramontina atual)."}
+                          {selectedPermission === "giro" && "Módulo de otimização de compras. O Orquestrador avalia o Lead Time de fornecedores em comparação com o giro (run-rate) dos produtos Classe A, automatizando os pedidos de reposição para itens críticos antes que a ruptura ocorra."}
+                          {selectedPermission === "participacao_ou_margem" && profile === "compras" && "Monitora a concentração de compras por fornecedor para mitigar riscos de dependência (Lock-in) na cadeia de suprimentos."}
+                          {selectedPermission === "participacao_ou_margem" && profile === "financeiro" && "Acesso Exclusivo! Permite auditar custos médios, rentabilidade bruta, margem líquida e aplicar ou revogar travas financeiras (como o limite de 50k para compras autônomas) nos SKUs premium."}
+                        </p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* HISTÓRICO DE VENDAS DASHBOARD */}
+              <div className={`p-6 rounded-2xl border shadow-xl relative overflow-hidden ${
+                isDark ? "bg-gradient-to-br from-slate-900 to-slate-950 border-slate-800" : "bg-gradient-to-br from-white to-slate-50 border-slate-200"
+              }`}>
+                <div className="absolute right-0 top-0 bottom-0 w-1/4 bg-gradient-to-l from-emerald-500/5 to-transparent pointer-events-none"></div>
+                <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
+                  <div>
+                    <h3 className={`text-lg font-bold flex items-center gap-2 ${isDark ? "text-slate-100" : "text-slate-900"}`}>
+                      <BarChart3 className="w-5 h-5 text-emerald-500" />
+                      Histórico Gerencial de Vendas
+                    </h3>
+                    <p className={`text-sm mt-1 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                      Análise de Receita (R$) vs Volume de Vendas nos últimos 6 meses (Produtos Curva A)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="h-[300px] w-full">
+                  {salesData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={salesData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#1e293b" : "#e2e8f0"} vertical={false} />
+                        <XAxis dataKey="mes_formatado" stroke={isDark ? "#64748b" : "#94a3b8"} fontSize={12} tickMargin={10} />
+                        <YAxis yAxisId="left" stroke={isDark ? "#64748b" : "#94a3b8"} fontSize={12} tickFormatter={(value) => `R$ ${Math.floor(value / 1000)}k`} />
+                        <YAxis yAxisId="right" orientation="right" stroke={isDark ? "#64748b" : "#94a3b8"} fontSize={12} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: isDark ? "#0f172a" : "#fff", borderColor: isDark ? "#1e293b" : "#e2e8f0", borderRadius: '8px' }}
+                          formatter={(value: any, name: string) => [
+                            name === "Receita" ? `R$ ${Number(value).toLocaleString()}` : `${value} un`, 
+                            name
+                          ]}
+                        />
+                        <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                        <Bar yAxisId="left" dataKey="receita_total" name="Receita" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={40} />
+                        <Line yAxisId="right" type="monotone" dataKey="volume_total" name="Volume (un)" stroke="#f59e0b" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* DEMO SCENARIOS CARDS GRID */}
               <div>
                 <div className="flex items-center justify-between mb-4">
@@ -812,8 +914,8 @@ export default function App() {
                       onClick={() => handleQuickQuery(scenario.query)}
                       className={`p-4 rounded-xl border cursor-pointer transition-all group flex flex-col justify-between shadow-md ${
                         isDark 
-                          ? "bg-slate-900/80 hover:bg-slate-800/90 border-slate-800/90 hover:border-slate-700" 
-                          : "bg-white hover:bg-slate-50 border-slate-200 hover:border-slate-300"
+                          ? "bg-gradient-to-br from-slate-900 to-slate-950 hover:from-slate-800 hover:to-slate-900 border-slate-800/90 hover:border-slate-700" 
+                          : "bg-gradient-to-br from-white to-slate-50 hover:to-slate-100 border-slate-200 hover:border-slate-300"
                       }`}
                     >
                       <div>
@@ -1028,6 +1130,70 @@ export default function App() {
         </main>
 
       </div>
+
+      {/* ALERT MODAL */}
+      <AnimatePresence>
+        {isAlertModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className={`w-full max-w-lg rounded-2xl shadow-2xl border overflow-hidden ${
+                isDark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"
+              }`}
+            >
+              <div className={`p-4 border-b flex items-center justify-between ${
+                isDark ? "bg-amber-500/10 border-slate-800" : "bg-amber-50 border-amber-200"
+              }`}>
+                <div className="flex items-center gap-2 text-amber-500">
+                  <ShieldAlert className="w-5 h-5" />
+                  <h3 className="font-bold">Alerta(s) de Operação (Monitoramento)</h3>
+                </div>
+                <button
+                  onClick={() => setIsAlertModalOpen(false)}
+                  className={`p-1 rounded-lg transition-colors ${
+                    isDark ? "hover:bg-slate-800 text-slate-400 hover:text-slate-200" : "hover:bg-amber-100 text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="p-6">
+                <div className={`p-4 rounded-xl border mb-4 ${
+                  isDark ? "bg-slate-950/50 border-slate-800" : "bg-slate-50 border-slate-200"
+                }`}>
+                  <h4 className={`font-semibold mb-2 ${isDark ? "text-slate-200" : "text-slate-800"}`}>
+                    ⚠️ Quebra Identificada: Grupo Tramontina
+                  </h4>
+                  <p className={`text-sm leading-relaxed ${isDark ? "text-slate-400" : "text-slate-600"}`}>
+                    Identificamos que o <strong>Interruptor Simples 10A (INT-LIZ-01)</strong> apresentou uma divergência de <strong>66.7%</strong> entre o total de entradas no mês e o saldo atual, superando o limite padrão da Curva C.
+                  </p>
+                </div>
+                <div className="flex justify-end gap-3 mt-6">
+                  <button
+                    onClick={() => setIsAlertModalOpen(false)}
+                    className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                      isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-200" : "bg-slate-200 hover:bg-slate-300 text-slate-800"
+                    }`}
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsAlertModalOpen(false);
+                      handleQuickQuery("Qual o estoque e quebra da Tramontina neste mês?");
+                    }}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-sm font-bold shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2"
+                  >
+                    Investigar com a Clara
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

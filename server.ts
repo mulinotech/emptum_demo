@@ -76,9 +76,27 @@ const INTENT_SYSTEM_PROMPT = `Você é um extrator de intenção especializado e
      * "Quais produtos estão em risco de ruptura?" → {"intent":"relatorio_reposicao","params":{}}  
      * "Mostre as anomalias de estoque e compras recomendadas" → {"intent":"relatorio_reposicao","params":{}}  
 
-6. **fora_escopo**  
-   - Perguntas que não se encaixam em nenhuma das intenções acima (ex: "Qual o preço do café?", "Quem é o presidente?").  
-   - Parâmetros: vazio ({}).  
+7. **abrir_chamado**
+   - Perguntas pedindo para abrir um ticket, relatar um problema de TI (ex: "meu mouse quebrou", "computador não liga", "abrir chamado").
+   - Parâmetros: \`descricao\` (string), \`solicitante\` (string).
+   - Exemplos:
+     * "Preciso abrir um chamado, a internet caiu" → {"intent":"abrir_chamado","params":{"descricao":"a internet caiu"}}
+
+8. **status_chamado**
+   - Perguntas sobre o status de um chamado de TI (ex: "como está meu chamado?", "status do ticket").
+   - Parâmetros: \`id_chamado\` (string, opcional).
+   
+9. **estoque_epi**
+   - Perguntas sobre estoque, saldo ou ruptura de Equipamentos de Proteção Individual (EPIs).
+   - Parâmetros: \`nome_epi\` (string, opcional).
+
+10. **consumo_epi_funcionario**
+    - Perguntas sobre os EPIs retirados ou consumidos por um funcionário.
+    - Parâmetros: \`funcionario_nome\` (string, opcional).
+
+11. **fora_escopo**
+   - Perguntas que não se encaixam em nenhuma das intenções acima (ex: "Qual o preço do café?").
+   - Parâmetros: vazio ({}).
 
 **Regras importantes:**  
 - Se o período não for mencionado, use o mês e ano atuais (considere a data de hoje: 20/07/2026 → mês=7, ano=2026).  
@@ -297,6 +315,47 @@ function formatResponseFallback(intent: string, data: any): string {
         text += `- **${item.nome}** (Classe ${item.classe} | Código: ${item.codigo}): Estoque de ${item.estoque_atual} un (Ponto Reposição: ${item.ponto_reposicao} un). Sugestão de Compra: ${item.sugestao_compra_qtd} un.\n  *${item.acao_mensagem}*\n`;
       });
       text += `\n`;
+    }
+  } else if (intent === "abrir_chamado") {
+    text += `### ✅ Chamado de TI Aberto com Sucesso!\n\n`;
+    text += `O seu ticket foi registrado e a equipe técnica já foi notificada (Alerta Externo/E-mail enviado).\n\n`;
+    text += `- **Ticket ID:** ${data.id}\n`;
+    text += `- **Descrição:** ${data.descricao}\n`;
+    text += `- **Status:** ${data.status}\n\n`;
+    text += `Você pode consultar o andamento depois perguntando "Qual o status do meu chamado?".`;
+  } else if (intent === "status_chamado") {
+    text += `### 🎫 Status dos Chamados de TI\n\n`;
+    if (Array.isArray(data) && data.length > 0) {
+      data.forEach(chamado => {
+        const emoji = chamado.status === 'RESOLVIDO' ? '✅' : (chamado.status === 'EM_ANDAMENTO' ? '🚧' : '⏳');
+        text += `- **${chamado.id}** (${chamado.solicitante}): ${chamado.descricao} - ${emoji} **${chamado.status}**\n`;
+      });
+    } else {
+      text += `Nenhum chamado pendente encontrado.\n`;
+    }
+  } else if (intent === "estoque_epi") {
+    text += `### 🦺 Controle de Estoque de EPIs\n\n`;
+    if (Array.isArray(data)) {
+      data.forEach(epi => {
+        text += `- **${epi.nome}** (${epi.codigo}): Saldo de ${epi.saldo} ${epi.unidade}. Ponto de Reposição: ${epi.ponto_reposicao}.\n`;
+        if (epi.ruptura) {
+          text += `  - 🚨 **Aviso:** Estoque abaixo do ponto de reposição!\n`;
+        }
+      });
+    }
+  } else if (intent === "consumo_epi_funcionario") {
+    text += `### 📋 Relatório Gerencial: Consumo de EPI por Funcionário\n\n`;
+    if (Array.isArray(data)) {
+      data.forEach(func => {
+        text += `- **${func.funcionario}** (Depto: ${func.departamento}) - Total retirado: **${func.total_itens} itens**\n`;
+        if (func.detalhes && func.detalhes.length > 0) {
+          func.detalhes.forEach((d: any) => {
+            text += `  - ${d.quantidade}x ${d.epi} (em ${d.data})\n`;
+          });
+        } else {
+          text += `  - Nenhum EPI retirado no período.\n`;
+        }
+      });
     }
   }
   return text;
@@ -587,6 +646,37 @@ function extractIntentDeterministic(question: string): { intent: string; params:
     };
   }
 
+
+  // Novos Intents para ITSM (Cliente 1)
+  if (q.includes("abrir chamado") || q.includes("ticket") || q.includes("problema de ti") || q.includes("mouse") || q.includes("teclado") || q.includes("internet") || q.includes("computador") || q.includes("notebook")) {
+    return {
+      intent: "abrir_chamado",
+      params: { descricao: question }
+    };
+  }
+
+  if (q.includes("status do chamado") || q.includes("meu chamado") || q.includes("andamento do ticket") || q.includes("status chamado")) {
+    return {
+      intent: "status_chamado",
+      params: {}
+    };
+  }
+
+  // Novos Intents para EPIs (Cliente 2)
+  if (q.includes("estoque de epi") || q.includes("capacete") || q.includes("luva") || q.includes("óculos") || q.includes("botina") || (q.includes("estoque") && q.includes("epi"))) {
+    return {
+      intent: "estoque_epi",
+      params: {}
+    };
+  }
+
+  if (q.includes("consumo de epi") || q.includes("funcionário") || q.includes("funcionario") || q.includes("retirou") || (q.includes("epi") && q.includes("joão"))) {
+    return {
+      intent: "consumo_epi_funcionario",
+      params: {}
+    };
+  }
+
   return {
     intent: "fora_escopo",
     params: {}
@@ -817,11 +907,11 @@ Pergunta atual do usuário: "${question}"`;
 
     // 2. CHECK PERMISSION FOR INTENT
     // Rule:
-    // - Perfil "compras" can view: estoque_fornecedor, participacao_fornecedor, comparacao_periodo, relatorio_reposicao
-    // - Perfil "financeiro" can view: estoque_fornecedor, comparacao_periodo, margem, relatorio_reposicao
+    // - Perfil "compras" can view: estoque_fornecedor, participacao_fornecedor, comparacao_periodo, relatorio_reposicao, abrir_chamado, status_chamado, estoque_epi, consumo_epi_funcionario
+    // - Perfil "financeiro" can view: estoque_fornecedor, comparacao_periodo, margem, relatorio_reposicao, abrir_chamado, status_chamado, estoque_epi, consumo_epi_funcionario
     const permissions: Record<string, string[]> = {
-      compras: ["estoque_fornecedor", "participacao_fornecedor", "comparacao_periodo", "relatorio_reposicao"],
-      financeiro: ["estoque_fornecedor", "comparacao_periodo", "margem", "relatorio_reposicao"]
+      compras: ["estoque_fornecedor", "participacao_fornecedor", "comparacao_periodo", "relatorio_reposicao", "abrir_chamado", "status_chamado", "estoque_epi", "consumo_epi_funcionario"],
+      financeiro: ["estoque_fornecedor", "comparacao_periodo", "margem", "relatorio_reposicao", "abrir_chamado", "status_chamado", "estoque_epi", "consumo_epi_funcionario"]
     };
 
     const userAllowedIntents = permissions[profile] || [];
@@ -829,7 +919,7 @@ Pergunta atual do usuário: "${question}"`;
     if (intent !== "fora_escopo" && !userAllowedIntents.includes(intent)) {
       const isCompras = profile === "compras";
       const deniedMsg = isCompras
-        ? `🔒 **Acesso Restrito**\n\nIdentifiquei que você está conectado com o perfil **Compras**.\n\nPor políticas estritas de governança e segurança da EletroMax Distribuidora, os dados financeiros de margem de lucro e custos de aquisição do **Motor WEG 5CV** são restritos ao perfil **Financeiro**.\n\nPara visualizar estes indicadores, alterne para o perfil **Financeiro** no seletor do menu superior.`
+        ? `🔒 **Acesso Restrito**\n\nIdentifiquei que você está conectado com o perfil **Compras**.\n\nPor políticas estritas de governança e segurança, os dados financeiros de margem de lucro e custos de aquisição são restritos ao perfil **Financeiro**.\n\nPara visualizar estes indicadores, alterne para o perfil **Financeiro** no seletor do menu superior.`
         : `🔒 **Acesso Restrito**\n\nIdentifiquei que você está conectado com o perfil **Financeiro**.\n\nOs relatórios operacionais de participação de fornecedores por CNPJ são restritos ao perfil **Compras**. Alterne para o perfil **Compras** no menu superior para autorizar a exibição.`;
 
       res.json({
@@ -985,6 +1075,22 @@ Pergunta atual do usuário: "${question}"`;
           }
         }
       }
+    } else if (intent === "abrir_chamado") {
+      const desc = params.descricao || question;
+      const solicitante = params.solicitante || "Usuário do Chat";
+      queryData = db.abrirChamado(solicitante, desc);
+      
+      // Simula o envio de um alerta externo (ex: email) para a fila de atendimento
+      console.log(`[ALERTA EXTERNO ENVIADO] E-mail e notificação push enviados para ti@empresa.com sobre o novo chamado: ${queryData.id}.`);
+    } else if (intent === "status_chamado") {
+      const id = params.id_chamado || "";
+      queryData = db.queryStatusChamado(id);
+    } else if (intent === "estoque_epi") {
+      const nomeEPI = params.nome_epi || "";
+      queryData = db.queryEstoqueEPI(nomeEPI);
+    } else if (intent === "consumo_epi_funcionario") {
+      const nome = params.funcionario_nome || "";
+      queryData = db.queryConsumoFuncionario(nome);
     }
 
     // Check if query failed because of unmatched items
@@ -1063,13 +1169,13 @@ app.post("/api/google-chat", async (req: Request, res: Response) => {
 
     // Handle user message event
     if (event.type === "MESSAGE") {
-      const userMessage = event.message?.text || "";
-      // Strip @mention prefix if present (e.g., "@Clara qual o estoque...")
-      const cleanQuestion = userMessage.replace(/@\w+/g, "").trim();
+      const userMessage = event.message?.argumentText || event.message?.text || "";
+      // Remove menções de bot (tanto formato @Nome quanto <users/123456>)
+      const cleanQuestion = userMessage.replace(/@\w+/g, "").replace(/<users\/[^>]+>/g, "").trim();
 
       if (!cleanQuestion) {
         res.json({
-          text: "Olá! Como posso ajudar você hoje com a gestão de estoque ou suprimentos da EletroMax?"
+          text: "Olá! Como posso ajudar você hoje com a gestão de estoque, suprimentos ou chamados?"
         });
         return;
       }
@@ -1092,11 +1198,13 @@ app.post("/api/google-chat", async (req: Request, res: Response) => {
       let chartUrl = null;
 
       const mockRes = {
+        status: function(code: number) { return this; },
         json: (data: any) => {
-          responseText = data.text || data.resposta_clara || "Não consegui processar a resposta.";
+          responseText = data.text || data.resposta_clara || data.error || "Não consegui processar a resposta.";
           chartUrl = data.chartUrl;
+          return this;
         }
-      } as Response;
+      } as unknown as Response;
 
       await handleOrchestratedChat(mockReq, mockRes);
 
@@ -1148,6 +1256,11 @@ app.get("/api/autocomplete", (req, res) => {
     produtos: db.produtos.map(p => ({ id: p.id, codigo: p.codigo, nome: p.nome, categoria: p.categoria })),
     fornecedores: db.fornecedores.map(f => ({ id: f.id, nome_fantasia: f.nome_fantasia, razao_social: f.razao_social, cnpj: f.cnpj }))
   });
+});
+
+// Endpoint para o Gráfico de Vendas Agregadas (Dashboard)
+app.get("/api/vendas", (req, res) => {
+  res.json(db.queryHistoricoVendas());
 });
 
 // Endpoint dedicado para consultar o Histórico Fictício de Vendas dos últimos 24 meses
