@@ -276,11 +276,12 @@ export default function App() {
     setInputVal("");
     setLoading(true);
 
-    // Timeout de 15 segundos no frontend para permitir o processamento completo da IA
+    // Aumentamos o Timeout de 15 segundos para 60 segundos!
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
+      // ⚠️ ATENÇÃO: Verifique se a rota no seu backend (Express) é /api/clara/chat mesmo!
       const response = await fetch("/api/clara/chat", {
         method: "POST",
         headers: {
@@ -300,7 +301,7 @@ export default function App() {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`Servidor respondeu com status ${response.status}`);
+        throw new Error(`O Servidor backend falhou com status ${response.status}`);
       }
 
       const data = await response.json();
@@ -308,8 +309,8 @@ export default function App() {
       const botMsg: Message = {
         id: `bot-${Date.now()}`,
         sender: "bot",
-        text: data.text || "Resposta processada.",
-        intent: data.intent,
+        text: data.text || data.reply || "Resposta processada.", // Garante que pega .text ou .reply
+        intent: data.intent || "ia_dinamica",
         chartUrl: data.chartUrl,
         custoBrl: data.custoBrl || 0.02,
         tokensUsados: data.tokensUsados || 450,
@@ -318,39 +319,22 @@ export default function App() {
       };
 
       setMessages(prev => [...prev, botMsg]);
+      
     } catch (error: any) {
       clearTimeout(timeoutId);
-      console.warn("⚠️ Conexão com servidor demorou ou falhou. Ativando Motor Inteligente de Contingência no Frontend:", error);
+      console.error("⚠️ ERRO REAL CAPTURADO (Sem maquiagem):", error);
 
-      // Resposta Local de Contingência (Imediata e Garante que a apresentação nunca falhe)
-      let respostaContingencia = "";
-      const queryLower = textToSend.toLowerCase();
-
-      if (queryLower.includes("tramontina") || queryLower.includes("estoque") || queryLower.includes("quebra")) {
-        respostaContingencia = `📊 **Clara - Relatório Analítico EletroMax (Modo de Alta Disponibilidade)**\n\n### Relatório de Estoque e Quebras - Grupo Tramontina\n\n- **Interruptor Simples 10A - Linha Liz** (INT-LIZ-01):\n  - Total Entrado (Compras): 4.500 un\n  - Saldo Atual em Estoque: 1.500 un\n  - Quebra de Estoque: 3.000 un (**66.7%**)\n  - Meta de Estoque (Classe C): 9.000 un\n  - 🛒 Sugestão de Compra Emergencial: 7.500 un\n  - 🚨 **ALERTA CRÍTICO**: Estoque muito abaixo da meta! Risco imediato de ruptura.\n  - ⚠️ **Atenção**: Quebra em 66.7%, acima do limite recomendado de 10%!\n\n- **Tomada Dupla 20A - Linha Liz** (TOM-LIZ-02):\n  - Total Entrado (Compras): 5.000 un\n  - Saldo Atual em Estoque: 5.000 un\n  - Quebra de Estoque: 0 un (**0%**)\n  - Meta de Estoque (Classe B): 4.800 un\n\n*Nota: Dados processados com inteligência preditiva e algoritmo de contingência da EletroMax.*`;
-      } else if (queryLower.includes("reposição") || queryLower.includes("reposicao") || queryLower.includes("matinal") || queryLower.includes("abcd") || queryLower.includes("ruptura")) {
-        respostaContingencia = `📋 **Relatório Matinal de Reposição & Análise Curva ABCD (EletroMax)**\n\nAnalisamos **50 produtos** do nosso catálogo:\n- 🚨 **Itens em Risco de Ruptura**: 3 itens identificados\n- 📦 **Itens com Excesso de Estoque**: 12 itens mapeados\n\n#### ⚡ Pedidos Automáticos Emitidos (Classe A - Meta 6 Meses)\n- **Inversor WEG 10CV** (MOT-003): Estoque de 15 un (Ponto de Reposição: 25 un).\n  *Alerta: Ponto de reposição atingido. Pedido de compra emitido AUTOMATICAMENTE de R$ 42.000,00.*\n\n#### 🛒 Pedidos Pendentes de Aprovação Humana (Classes B, C e D)\n- **Disjuntor Termomagnético 16A** (Classe B | Código: DIS-001): Estoque de 380 un (Ponto Reposição: 450 un). Sugestão de Compra: 200 un.\n  *Deseja emitir o pedido de compra para este item?*`;
-      } else if (queryLower.includes("margem") || queryLower.includes("motor")) {
-        if (profile === "compras") {
-          respostaContingencia = `🔒 **Acesso Restrito**\n\nIdentifiquei que você está conectado com o perfil **Compras**.\n\nPor políticas de segurança da EletroMax Distribuidora, a margem financeira do **Motor WEG 5CV** é restrita ao perfil **Financeiro**. Alterne o perfil no topo para autorizar a exibição.`;
-        } else {
-          respostaContingencia = `📊 **Análise de Margem Financeira - EletroMax**\n\n### Produto: **Motor Elétrico WEG 5CV Trifásico** (MOT-002)\n- Preço de Venda Praticado: **R$ 1.850,00**\n- Custo Médio de Aquisição: **R$ 1.200,00**\n- Margem de Lucro Bruta: **R$ 650,00** (**35.1%**)\n- Rentabilidade: **SAUDÁVEL (Acima da meta de 25%)**`;
-        }
-      } else if (queryLower.includes("50.000") || queryLower.includes("50k") || queryLower.includes("trava") || queryLower.includes("alçada") || queryLower.includes("alcada")) {
-        respostaContingencia = `🛡️ **Validação de Trava de Segurança Financeira (R$ 50.000,00)**\n\nIdentifiquei 1 pedido de compra de item Classe A em estado especial:\n\n- **Transformador Triofásico 1000VA** (TRF-001):\n  - Sugestão de Compra: 300 unidades\n  - Valor Total Calculado: **R$ 54.000,00**\n  - Status: 🛡️ **PENDENTE DE ASSINATURA DA DIRETORIA** (Ultrapassou a alçada automática de R$ 50.000,00).`;
-      } else {
-        respostaContingencia = `📊 **Clara AI - EletroMax Orquestrador**\n\nRecebi sua consulta: "${textToSend}".\n\nOs indicadores para este item foram calculados com base na nossa Curva ABCD e histórico de 24 meses:\n- **Status:** Operacional e em conformidade com as regras de estoque.\n- **Lead Time médio:** 15 dias.\n- **Recomendação:** Nenhuma anomalia de quebra detectada para o período.`;
-      }
-
+      // CÓDIGO LIMPO: Se der erro no servidor ou demorar, a Clara vai confessar o erro de TI, 
+      // em vez de soltar o texto de Lead Time / Curva ABCD.
       const botMsg: Message = {
-        id: `bot-fallback-${Date.now()}`,
+        id: `bot-error-${Date.now()}`,
         sender: "bot",
-        text: respostaContingencia,
-        intent: "consulta_contingencia",
+        text: `**Erro de Comunicação Backend:** A requisição demorou muito ou o servidor (app.cjs) retornou um erro. Abra o 'Inspect' (F12) > aba 'Console' ou 'Network' para ver o motivo da falha.\nDetalhe: ${error.message}`,
+        intent: "erro_de_ti",
         chartUrl: null,
-        custoBrl: 0.02,
-        tokensUsados: 380,
-        alertaQuebra: queryLower.includes("tramontina")
+        custoBrl: 0,
+        tokensUsados: 0,
+        alertaQuebra: false
       };
 
       setMessages(prev => [...prev, botMsg]);

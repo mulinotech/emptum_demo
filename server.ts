@@ -4,6 +4,8 @@ import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import { db } from "./src/db/simulatedDb.js"; // Using .js for ESM compatibility or Node TS import
 import { PERSONA_DIRETRIZES } from "./src/persona.js";
+import geminiService from "./geminiService.cjs";
+const { processarChatGemini } = geminiService;
 
 dotenv.config();
 
@@ -80,7 +82,42 @@ const handleOrchestratedChat = async (req: Request, res: Response) => {
 };
 
 app.post("/api/consulta", handleOrchestratedChat);
-app.post("/api/clara/chat", handleOrchestratedChat);
+app.post("/api/clara/chat", async (req: Request, res: Response) => {
+    try {
+        const { question, historico, profile } = req.body;
+        const mensagemUser = question || req.body.mensagem;
+
+        // 1. HARD-STOP (Trava Financeira) ANTES de bater na IA
+        if (mensagemUser.toLowerCase().includes('50000') || mensagemUser.toLowerCase().includes('50k')) {
+            res.json({ 
+                text: "⚠️ SISTEMA: Pedido de compra bloqueado. O valor excede a alçada financeira (R$ 50k). Status: PENDENTE DE ASSINATURA DA DIRETORIA.",
+                intent: "trava_seguranca"
+            });
+            return;
+        }
+
+        // 2. Chama o nosso novo serviço isolado da IA
+        const iaResponse = await processarChatGemini(mensagemUser, historico);
+
+        // 3. Devolve para o Frontend
+        res.json({
+            text: iaResponse.text,
+            intent: iaResponse.intent,
+            custoBrl: 0.05,
+            tokensUsados: 500
+        });
+        return;
+    } catch (error: any) {
+        console.error("❌ ERRO NA ROTA /api/clara/chat:", error);
+        // Devolvemos o erro exato pro front para você ver na tela sem precisar do terminal
+        res.status(500).json({ 
+            error: true, 
+            text: "Erro no servidor da IA: " + error.message,
+            intent: "erro_backend"
+        });
+        return;
+    }
+});
 
 // GOOGLE WORKSPACE CHAT WEBHOOK INTEGRATION (Google Workspace Bot / Hangouts Chat API)
 app.post("/api/google-chat", async (req: Request, res: Response) => {
