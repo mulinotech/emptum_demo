@@ -194,7 +194,7 @@ export default function App() {
   });
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedPermission, setSelectedPermission] = useState<"estoque" | "giro" | "participacao_ou_margem">("participacao_ou_margem");
-  const [activeView, setActiveView] = useState<"dashboard" | "simulator">("dashboard");
+  const [activeView, setActiveView] = useState<"dashboard" | "simulator" | "dev">("dashboard");
 
   useEffect(() => {
     setSelectedPermission("participacao_ou_margem");
@@ -276,9 +276,9 @@ export default function App() {
     setInputVal("");
     setLoading(true);
 
-    // Timeout de 6 segundos no frontend para evitar travamento infinito da interface
+    // Timeout de 15 segundos no frontend para permitir o processamento completo da IA
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
       const response = await fetch("/api/clara/chat", {
@@ -505,6 +505,19 @@ export default function App() {
               <MessageSquareCode className="w-3.5 h-3.5" />
               Console Auditoria
             </button>
+            <button
+              onClick={() => setActiveView("dev")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                activeView === "dev"
+                  ? isDark 
+                    ? "bg-slate-800 text-slate-100 shadow-sm border border-slate-700/50"
+                    : "bg-white text-slate-900 shadow-sm border border-slate-200"
+                  : isDark ? "text-slate-400 hover:text-slate-200" : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <Cpu className="w-3.5 h-3.5" />
+              Console Técnico
+            </button>
           </div>
 
           {/* Profile Switcher */}
@@ -548,48 +561,6 @@ export default function App() {
           </button>
         </div>
       </header>
-
-      {/* KPI METRICS OVERVIEW STRIP */}
-      <section className={`border-b px-6 py-2.5 flex items-center justify-between gap-4 overflow-x-auto text-xs shrink-0 ${
-        isDark ? "bg-[#0f172a]/40 border-slate-800/60" : "bg-slate-200/60 border-slate-300"
-      }`}>
-        <div className="flex items-center gap-6 shrink-0">
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-emerald-500" />
-            <span className={isDark ? "text-slate-400" : "text-slate-600"}>Status Orquestrador:</span>
-            <span className="font-semibold text-emerald-500 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              Operacional (Gemini 2.5)
-            </span>
-          </div>
-
-          <div className={`h-3 w-px ${isDark ? "bg-slate-800" : "bg-slate-300"}`}></div>
-
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-blue-500" />
-            <span className={isDark ? "text-slate-400" : "text-slate-600"}>Regra Ativa:</span>
-            <span className={`font-medium ${isDark ? "text-slate-200" : "text-slate-800"}`}>Trava R$ 50k (Diretoria)</span>
-          </div>
-
-          <div className={`h-3 w-px ${isDark ? "bg-slate-800" : "bg-slate-300"}`}></div>
-
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 text-amber-500" />
-            <span className={isDark ? "text-slate-400" : "text-slate-600"}>Quebras Mapeadas:</span>
-            <button 
-              onClick={() => setIsAlertModalOpen(true)}
-              className="font-semibold text-amber-500 hover:text-amber-400 transition-colors cursor-pointer underline decoration-amber-500/30 underline-offset-4"
-            >
-              {totalAlertas > 0 ? `${totalAlertas} Alerta(s) - Ver Detalhes` : "Tramontina Monitorada - Ver Detalhes"}
-            </button>
-          </div>
-        </div>
-
-        <div className={`flex items-center gap-4 shrink-0 text-[11px] ${isDark ? "text-slate-400" : "text-slate-600"}`}>
-          <div>Tokens Usados: <span className={`font-mono font-medium ${isDark ? "text-slate-200" : "text-slate-800"}`}>{totalTokens.toLocaleString()}</span></div>
-          <div>Custo Estimado: <span className="font-mono text-emerald-500 font-medium">R$ {totalCusto.toFixed(4)}</span></div>
-        </div>
-      </section>
 
       {/* MAIN CONTENT AREA */}
       <div className="flex-1 flex overflow-hidden">
@@ -724,42 +695,49 @@ export default function App() {
             </div>
 
             <div className="flex-1 overflow-y-auto pr-1 text-xs space-y-1.5 max-h-60 lg:max-h-none">
-              {activeTab === "produtos" ? (
-                filteredProducts.map(p => (
-                  <div
-                    key={p.id}
-                    onClick={() => handleQuickQuery(`Qual o estoque e giro do item ${p.nome}?`)}
-                    className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${
-                      isDark 
-                        ? "bg-slate-900/60 hover:bg-slate-800/80 border-slate-800/60" 
-                        : "bg-slate-50 hover:bg-slate-100 border-slate-200"
-                    }`}
-                  >
-                    <div className="min-w-0 pr-2">
-                      <div className={`font-medium truncate ${isDark ? "text-slate-300 group-hover:text-slate-100" : "text-slate-700 group-hover:text-slate-900"}`}>{p.nome}</div>
-                      <div className={`text-[10px] font-mono ${isDark ? "text-slate-500" : "text-slate-400"}`}>{p.codigo} • {p.categoria}</div>
+              {(activeView === "dev" || searchTerm.length > 0) ? (
+                activeTab === "produtos" ? (
+                  filteredProducts.map(p => (
+                    <div
+                      key={p.id}
+                      onClick={() => handleQuickQuery(`Qual o estoque e giro do item ${p.nome}?`)}
+                      className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${
+                        isDark 
+                          ? "bg-slate-900/60 hover:bg-slate-800/80 border-slate-800/60" 
+                          : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+                      }`}
+                    >
+                      <div className="min-w-0 pr-2">
+                        <div className={`font-medium truncate ${isDark ? "text-slate-300 group-hover:text-slate-100" : "text-slate-700 group-hover:text-slate-900"}`}>{p.nome}</div>
+                        <div className={`text-[10px] font-mono ${isDark ? "text-slate-500" : "text-slate-400"}`}>{p.codigo} • {p.categoria}</div>
+                      </div>
+                      <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform group-hover:translate-x-0.5 ${isDark ? "text-slate-600 group-hover:text-slate-400" : "text-slate-400 group-hover:text-slate-600"}`} />
                     </div>
-                    <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform group-hover:translate-x-0.5 ${isDark ? "text-slate-600 group-hover:text-slate-400" : "text-slate-400 group-hover:text-slate-600"}`} />
-                  </div>
-                ))
+                  ))
+                ) : (
+                  filteredSuppliers.map(f => (
+                    <div
+                      key={f.id}
+                      onClick={() => handleQuickQuery(`Qual o estoque e quebra da ${f.nome_fantasia} neste mês?`)}
+                      className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${
+                        isDark 
+                          ? "bg-slate-900/60 hover:bg-slate-800/80 border-slate-800/60" 
+                          : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+                      }`}
+                    >
+                      <div className="min-w-0 pr-2">
+                        <div className={`font-medium truncate ${isDark ? "text-slate-300 group-hover:text-slate-100" : "text-slate-700 group-hover:text-slate-900"}`}>{f.nome_fantasia}</div>
+                        <div className={`text-[10px] font-mono ${isDark ? "text-slate-500" : "text-slate-400"}`}>CNPJ: {f.cnpj}</div>
+                      </div>
+                      <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform group-hover:translate-x-0.5 ${isDark ? "text-slate-600 group-hover:text-slate-400" : "text-slate-400 group-hover:text-slate-600"}`} />
+                    </div>
+                  ))
+                )
               ) : (
-                filteredSuppliers.map(f => (
-                  <div
-                    key={f.id}
-                    onClick={() => handleQuickQuery(`Qual o estoque e quebra da ${f.nome_fantasia} neste mês?`)}
-                    className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${
-                      isDark 
-                        ? "bg-slate-900/60 hover:bg-slate-800/80 border-slate-800/60" 
-                        : "bg-slate-50 hover:bg-slate-100 border-slate-200"
-                    }`}
-                  >
-                    <div className="min-w-0 pr-2">
-                      <div className={`font-medium truncate ${isDark ? "text-slate-300 group-hover:text-slate-100" : "text-slate-700 group-hover:text-slate-900"}`}>{f.nome_fantasia}</div>
-                      <div className={`text-[10px] font-mono ${isDark ? "text-slate-500" : "text-slate-400"}`}>CNPJ: {f.cnpj}</div>
-                    </div>
-                    <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform group-hover:translate-x-0.5 ${isDark ? "text-slate-600 group-hover:text-slate-400" : "text-slate-400 group-hover:text-slate-600"}`} />
-                  </div>
-                ))
+                <div className={`p-4 text-center border-dashed border-2 rounded-xl mt-4 ${isDark ? "border-slate-800 text-slate-500" : "border-slate-300 text-slate-400"}`}>
+                  <Search className="w-6 h-6 mx-auto mb-2 opacity-50" />
+                  <p>Digite para buscar itens ou acesse a aba Console Técnico para ver a base completa.</p>
+                </div>
               )}
             </div>
           </div>
@@ -936,9 +914,15 @@ export default function App() {
                         </p>
                       </div>
 
-                      <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-blue-500 font-medium">
-                        <span>Testar no Orquestrador</span>
-                        <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                      <div className={`pt-3 border-t ${isDark ? "border-slate-800/60" : "border-slate-200"}`}>
+                        <button className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 ${
+                          isDark 
+                            ? "border-blue-500/50 text-blue-400 hover:bg-blue-500/10 hover:border-blue-500" 
+                            : "border-blue-300 text-blue-600 hover:bg-blue-50 hover:border-blue-400"
+                        }`}>
+                          Executar Cenário
+                          <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -972,47 +956,77 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Architecture Card */}
+                {/* Status Cards (Moved from top) */}
                 <div className={`p-5 rounded-2xl border flex flex-col justify-between ${isDark ? "bg-slate-900/60 border-slate-800" : "bg-white border-slate-200 shadow-sm"}`}>
                   <div>
                     <h4 className={`text-sm font-bold mb-3 flex items-center gap-2 ${isDark ? "text-slate-200" : "text-slate-900"}`}>
-                      <Cpu className="w-4 h-4 text-blue-500" />
-                      Arquitetura do Orquestrador
+                      <Activity className="w-4 h-4 text-emerald-500" />
+                      Status Operacional
                     </h4>
-                    <div className={`space-y-2.5 text-xs ${isDark ? "text-slate-400" : "text-slate-600"}`}>
-                      <div className={`flex items-center justify-between p-2 rounded-lg ${isDark ? "bg-slate-950/40" : "bg-slate-50"}`}>
-                        <span>Modelo de Raciocínio:</span>
-                        <span className={`font-mono font-semibold ${isDark ? "text-slate-200" : "text-slate-900"}`}>Google Gemini 2.5 Flash</span>
+                    <div className={`space-y-3 text-xs ${isDark ? "text-slate-400" : "text-slate-600"}`}>
+                      <div className={`flex items-center justify-between p-3 rounded-xl border ${isDark ? "bg-slate-950/40 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+                        <div className="flex items-center gap-2"><Activity className="w-4 h-4 text-emerald-500"/> Orquestrador:</div>
+                        <span className="font-semibold text-emerald-500 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          Online
+                        </span>
                       </div>
-                      <div className={`flex items-center justify-between p-2 rounded-lg ${isDark ? "bg-slate-950/40" : "bg-slate-50"}`}>
-                        <span>Canal de Produção:</span>
-                        <span className="text-emerald-500 font-semibold">Google Workspace Chat (Inpyx)</span>
+                      <div className={`flex items-center justify-between p-3 rounded-xl border ${isDark ? "bg-slate-950/40 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+                        <div className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-blue-500"/> Regra Ativa:</div>
+                        <span className={`font-medium ${isDark ? "text-slate-200" : "text-slate-800"}`}>Trava R$ 50k</span>
                       </div>
-                      <div className={`flex items-center justify-between p-2 rounded-lg ${isDark ? "bg-slate-950/40" : "bg-slate-50"}`}>
-                        <span>Servidor Backend:</span>
-                        <span className={`font-mono ${isDark ? "text-slate-200" : "text-slate-900"}`}>Express + TypeScript (Porta 3000)</span>
-                      </div>
-                      <div className={`flex items-center justify-between p-2 rounded-lg ${isDark ? "bg-slate-950/40" : "bg-slate-50"}`}>
-                        <span>Hospedagem Cloud:</span>
-                        <span className="text-blue-500 font-semibold">Cloudez Production App</span>
+                      <div className={`flex items-center justify-between p-3 rounded-xl border ${isDark ? "bg-slate-950/40 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+                        <div className="flex items-center gap-2"><Zap className="w-4 h-4 text-amber-500"/> Alertas Mapeados:</div>
+                        <button 
+                          onClick={() => setIsAlertModalOpen(true)}
+                          className="font-semibold text-amber-500 hover:text-amber-400 transition-colors underline decoration-amber-500/30 underline-offset-4"
+                        >
+                          {totalAlertas > 0 ? `${totalAlertas} Alerta(s)` : "Tramontina"}
+                        </button>
                       </div>
                     </div>
                   </div>
-
-                  <div className={`pt-4 border-t text-center ${isDark ? "border-slate-800" : "border-slate-200"}`}>
-                    <button
-                      onClick={() => setActiveView("simulator")}
-                      className={`w-full py-2 font-semibold text-xs rounded-xl transition-all ${
-                        isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-200" : "bg-slate-100 hover:bg-slate-200 text-slate-800"
-                      }`}
-                    >
-                      Ir para Console de Testes
-                    </button>
+                  <div className={`pt-4 mt-2 border-t flex items-center justify-between text-[11px] font-mono ${isDark ? "border-slate-800 text-slate-400" : "border-slate-200 text-slate-500"}`}>
+                    <span>Tokens: {totalTokens.toLocaleString()}</span>
+                    <span className="text-emerald-500">R$ {totalCusto.toFixed(4)}</span>
                   </div>
                 </div>
 
               </div>
 
+            </div>
+          ) : activeView === "dev" ? (
+            /* DEV CONSOLE VIEW */
+            <div className="flex-1 p-6 overflow-y-auto space-y-6">
+              <div className="flex items-center gap-2 mb-4">
+                <Cpu className="w-6 h-6 text-blue-500" />
+                <h2 className={`text-xl font-bold ${isDark ? "text-slate-100" : "text-slate-900"}`}>Console Técnico (Dev/Debug)</h2>
+              </div>
+              
+              <div className={`p-5 rounded-2xl border ${isDark ? "bg-slate-900/60 border-slate-800" : "bg-white border-slate-200 shadow-sm"} max-w-2xl`}>
+                <h4 className={`text-sm font-bold mb-3 flex items-center gap-2 ${isDark ? "text-slate-200" : "text-slate-900"}`}>
+                  <Cpu className="w-4 h-4 text-blue-500" />
+                  Arquitetura do Orquestrador
+                </h4>
+                <div className={`space-y-2.5 text-xs ${isDark ? "text-slate-400" : "text-slate-600"}`}>
+                  <div className={`flex items-center justify-between p-2 rounded-lg ${isDark ? "bg-slate-950/40" : "bg-slate-50"}`}>
+                    <span>Modelo de Raciocínio:</span>
+                    <span className={`font-mono font-semibold ${isDark ? "text-slate-200" : "text-slate-900"}`}>Google Gemini 2.5 Flash</span>
+                  </div>
+                  <div className={`flex items-center justify-between p-2 rounded-lg ${isDark ? "bg-slate-950/40" : "bg-slate-50"}`}>
+                    <span>Canal de Produção:</span>
+                    <span className="text-emerald-500 font-semibold">Google Workspace Chat (Inpyx)</span>
+                  </div>
+                  <div className={`flex items-center justify-between p-2 rounded-lg ${isDark ? "bg-slate-950/40" : "bg-slate-50"}`}>
+                    <span>Servidor Backend:</span>
+                    <span className={`font-mono ${isDark ? "text-slate-200" : "text-slate-900"}`}>Express + TypeScript (Porta 3000)</span>
+                  </div>
+                  <div className={`flex items-center justify-between p-2 rounded-lg ${isDark ? "bg-slate-950/40" : "bg-slate-50"}`}>
+                    <span>Hospedagem Cloud:</span>
+                    <span className="text-blue-500 font-semibold">Cloudez Production App</span>
+                  </div>
+                </div>
+              </div>
             </div>
           ) : (
             /* SIMULATOR & AUDIT CONSOLE VIEW */

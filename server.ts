@@ -89,13 +89,20 @@ const INTENT_SYSTEM_PROMPT = `Você é um extrator de intenção especializado e
 9. **estoque_epi**
    - Perguntas sobre estoque, saldo ou ruptura de Equipamentos de Proteção Individual (EPIs).
    - Parâmetros: \`nome_epi\` (string, opcional).
+   - Exemplos: "Temos capacete no estoque?", "Qual o saldo de luvas?"
 
 10. **consumo_epi_funcionario**
-    - Perguntas sobre os EPIs retirados ou consumidos por um funcionário.
-    - Parâmetros: \`funcionario_nome\` (string, opcional).
+    - Perguntas sobre os EPIs retirados/consumidos por um funcionário.
+    - Parâmetros: \`funcionario_nome\` (string).
+    - Exemplos: "Quais EPIs o João retirou?", "Consumo do José da manutenção."
 
-11. **fora_escopo**
-   - Perguntas que não se encaixam em nenhuma das intenções acima (ex: "Qual o preço do café?").
+11. **historico_vendas**
+    - Perguntas sobre o volume de vendas, faturamento, ou histórico de vendas em um mês e ano específicos.
+    - Parâmetros: \`mes\` (número 1-12), \`ano\` (número 4 dígitos). Se o usuário não especificar, não envie os parâmetros ou tente inferir.
+    - Exemplos: "qual foi nosso volume de vendas em janeiro de 2026?", "quanto faturamos mês passado?"
+
+12. **fora_escopo**
+    - Perguntas que não se encaixam em nenhuma das intenções acima (ex: "Qual o preço do café?", previsão do tempo, código, cálculos matemáticos complexos sem dados).
    - Parâmetros: vazio ({}).
 
 **Regras importantes:**  
@@ -677,6 +684,14 @@ function extractIntentDeterministic(question: string): { intent: string; params:
     };
   }
 
+  // Novo Intent: Historico de Vendas
+  if (q.includes("vendas") || q.includes("volume") || q.includes("faturamos") || q.includes("faturamento") || q.includes("vendemos")) {
+    return {
+      intent: "historico_vendas",
+      params: {}
+    };
+  }
+
   return {
     intent: "fora_escopo",
     params: {}
@@ -726,7 +741,7 @@ Contexto da Sessão:
 - Perfil do usuário atual: ${profile}
 ${databaseContext}`;
 
-      const response = await ai.models.generateContent({
+      const aiPromise = ai.models.generateContent({
         model: "gemini-2.5-flash",
         contents: question,
         config: {
@@ -734,7 +749,10 @@ ${databaseContext}`;
         }
       });
 
-      if (response.text) {
+      // 5 seconds max for humanized open-ended chat
+      const response = await generateWithTimeout(aiPromise, 5000);
+
+      if (response && response.text) {
         return response.text.trim();
       }
     } catch (err) {
@@ -907,11 +925,11 @@ Pergunta atual do usuário: "${question}"`;
 
     // 2. CHECK PERMISSION FOR INTENT
     // Rule:
-    // - Perfil "compras" can view: estoque_fornecedor, participacao_fornecedor, comparacao_periodo, relatorio_reposicao, abrir_chamado, status_chamado, estoque_epi, consumo_epi_funcionario
-    // - Perfil "financeiro" can view: estoque_fornecedor, comparacao_periodo, margem, relatorio_reposicao, abrir_chamado, status_chamado, estoque_epi, consumo_epi_funcionario
+    // - Perfil "compras" can view: estoque_fornecedor, participacao_fornecedor, comparacao_periodo, relatorio_reposicao, abrir_chamado, status_chamado, estoque_epi, consumo_epi_funcionario, historico_vendas
+    // - Perfil "financeiro" can view: estoque_fornecedor, comparacao_periodo, margem, relatorio_reposicao, abrir_chamado, status_chamado, estoque_epi, consumo_epi_funcionario, historico_vendas
     const permissions: Record<string, string[]> = {
-      compras: ["estoque_fornecedor", "participacao_fornecedor", "comparacao_periodo", "relatorio_reposicao", "abrir_chamado", "status_chamado", "estoque_epi", "consumo_epi_funcionario"],
-      financeiro: ["estoque_fornecedor", "comparacao_periodo", "margem", "relatorio_reposicao", "abrir_chamado", "status_chamado", "estoque_epi", "consumo_epi_funcionario"]
+      compras: ["estoque_fornecedor", "participacao_fornecedor", "comparacao_periodo", "relatorio_reposicao", "abrir_chamado", "status_chamado", "estoque_epi", "consumo_epi_funcionario", "historico_vendas"],
+      financeiro: ["estoque_fornecedor", "comparacao_periodo", "margem", "relatorio_reposicao", "abrir_chamado", "status_chamado", "estoque_epi", "consumo_epi_funcionario", "historico_vendas"]
     };
 
     const userAllowedIntents = permissions[profile] || [];
@@ -948,9 +966,22 @@ Pergunta atual do usuário: "${question}"`;
       }
 
       const chartUrl = null;
+      let formattedText = "";
+      let formattingTokenCount = 0;
 
-      const formatted = await formatResponseWithAi(profile, question, intent, dbData, history);
-      const totalTokens = extractionTokens + formatted.tokenCount;
+      // CORTE DE AUTONOMIA (Exception Handling): Se houver quebra de regra de negócio (>R$ 50k),
+      // forçamos uma resposta engessada e não deixamos a IA formatar o texto para evitar alucinações.
+      const isBlockedBy50kRule = dbData.pedidos_automaticos_classe_a && dbData.pedidos_automaticos_classe_a.some((item: any) => item.acao_mensagem && item.acao_mensagem.includes("PENDENTE DE ASSINATURA DA DIRETORIA"));
+
+      if (isBlockedBy50kRule) {
+        formattedText = formatResponseFallback(intent, dbData);
+      } else {
+        const formatted = await formatResponseWithAi(profile, question, intent, dbData, history);
+        formattedText = formatted.text;
+        formattingTokenCount = formatted.tokenCount;
+      }
+
+      const totalTokens = extractionTokens + formattingTokenCount;
       const precoPorMilTokensUsd = 0.00015; // Gemini Flash standard estimation
       const taxaCambioUsdToBrl = 5.60;
       const custoUsd = (totalTokens / 1000) * precoPorMilTokensUsd;
@@ -959,7 +990,7 @@ Pergunta atual do usuário: "${question}"`;
       res.json({
         intent,
         data: dbData,
-        text: formatted.text,
+        text: formattedText,
         chartUrl,
         custoBrl,
         tokensUsados: totalTokens,
@@ -1091,6 +1122,23 @@ Pergunta atual do usuário: "${question}"`;
     } else if (intent === "consumo_epi_funcionario") {
       const nome = params.funcionario_nome || "";
       queryData = db.queryConsumoFuncionario(nome);
+    } else if (intent === "historico_vendas") {
+      const { processarMensagemClara } = await import("./src/services/ClaraChatService.js");
+      const textoFinal = await processarMensagemClara(question, intent);
+      
+      res.json({
+        intent,
+        params,
+        data: db.queryHistoricoVendas(),
+        text: textoFinal,
+        chartUrl: null,
+        custoBrl: 0.02,
+        tokensUsados: 150,
+        alertaQuebra: false,
+        sucesso: true,
+        resposta_clara: textoFinal
+      });
+      return;
     }
 
     // Check if query failed because of unmatched items
