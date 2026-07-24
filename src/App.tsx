@@ -276,12 +276,11 @@ export default function App() {
     setInputVal("");
     setLoading(true);
 
-    // Aumentamos o Timeout de 15 segundos para 60 segundos!
+    // Timeout estendido para 120s para acomodar RAG e síntese da IA confortavelmente
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
 
     try {
-      // ⚠️ ATENÇÃO: Verifique se a rota no seu backend (Express) é /api/clara/chat mesmo!
       const response = await fetch("/api/clara/chat", {
         method: "POST",
         headers: {
@@ -301,7 +300,7 @@ export default function App() {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`O Servidor backend falhou com status ${response.status}`);
+        throw new Error(`Servidor indisponível (Status HTTP ${response.status})`);
       }
 
       const data = await response.json();
@@ -309,7 +308,7 @@ export default function App() {
       const botMsg: Message = {
         id: `bot-${Date.now()}`,
         sender: "bot",
-        text: data.text || data.reply || "Resposta processada.", // Garante que pega .text ou .reply
+        text: data.text || data.resposta_clara || "Não consegui obter a resposta no momento.",
         intent: data.intent || "ia_dinamica",
         chartUrl: data.chartUrl,
         custoBrl: data.custoBrl || 0.02,
@@ -322,15 +321,20 @@ export default function App() {
       
     } catch (error: any) {
       clearTimeout(timeoutId);
-      console.error("⚠️ ERRO REAL CAPTURADO (Sem maquiagem):", error);
+      console.error("⚠️ Erro na comunicação com a assistente Clara:", error);
 
-      // CÓDIGO LIMPO: Se der erro no servidor ou demorar, a Clara vai confessar o erro de TI, 
-      // em vez de soltar o texto de Lead Time / Curva ABCD.
+      let mensgemErroUsuario = "Ops, ocorreu um erro de conexão. Por favor, tente novamente.";
+      if (error.name === 'AbortError') {
+        mensgemErroUsuario = "A consulta demorou mais que o esperado para responder. Por favor, tente reformular sua pergunta de forma mais específica.";
+      } else if (error.message && error.message.includes("404")) {
+        mensgemErroUsuario = "Serviço temporariamente indisponível (Erro 404). Por favor, tente novamente em instantes.";
+      }
+
       const botMsg: Message = {
         id: `bot-error-${Date.now()}`,
         sender: "bot",
-        text: `**Erro de Comunicação Backend:** A requisição demorou muito ou o servidor (app.cjs) retornou um erro. Abra o 'Inspect' (F12) > aba 'Console' ou 'Network' para ver o motivo da falha.\nDetalhe: ${error.message}`,
-        intent: "erro_de_ti",
+        text: mensgemErroUsuario,
+        intent: "erro_conexao",
         chartUrl: null,
         custoBrl: 0,
         tokensUsados: 0,

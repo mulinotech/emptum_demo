@@ -1,320 +1,329 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { db } from "../db/simulatedDb.js";
+import { searchKnowledge } from "./ragService.js";
+import { PERSONA_DIRETRIZES } from "../persona.js";
 
 dotenv.config();
 
-const aiClient = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || ""
-});
-
-// Tools Declarations
-const buscarEstoqueFornecedorTool = {
-  name: "buscar_estoque_fornecedor",
-  description: "Busca o saldo atual, total de entradas e quebra de estoque de um fornecedor específico.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      fornecedor_nome: { type: Type.STRING, description: "Nome fantasia do fornecedor" },
-      mes_referencia: { type: Type.NUMBER, description: "Mês da consulta (1-12)" },
-      ano_referencia: { type: Type.NUMBER, description: "Ano com 4 dígitos" }
-    },
-    required: ["fornecedor_nome"]
+/* -------------------------------------------------------------------------- */
+/*  Cliente Gemini (config de rede que funciona no ambiente Cloudez)          */
+/* -------------------------------------------------------------------------- */
+let aiClient: GoogleGenAI | null = null;
+function getAiClient(): GoogleGenAI {
+  if (!aiClient) {
+    const key = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "";
+    aiClient = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        // Header que destrava o acesso à API no runtime gerenciado + timeout p/ nunca travar
+        headers: { "User-Agent": "aistudio-build" },
+        timeout: 30000
+      }
+    });
   }
-};
+  return aiClient;
+}
 
-const participacaoFornecedorTool = {
-  name: "participacao_fornecedor",
-  description: "Busca a participação percentual ou valor total de compras de um grupo fornecedor (agrupando CNPJs).",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      grupo_nome: { type: Type.STRING, description: "Nome do grupo fornecedor" },
-      mes_referencia: { type: Type.NUMBER, description: "Mês da consulta (1-12)" },
-      ano_referencia: { type: Type.NUMBER, description: "Ano com 4 dígitos" }
-    },
-    required: ["grupo_nome"]
-  }
-};
+const MODEL = "gemini-2.5-flash";
 
-const comparacaoPeriodoTool = {
-  name: "comparacao_periodo",
-  description: "Compara dois períodos diferentes para um mesmo produto.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      produto_nome: { type: Type.STRING, description: "Nome do produto" },
-      mes1: { type: Type.NUMBER, description: "Mês 1 (1-12)" },
-      ano1: { type: Type.NUMBER, description: "Ano 1 com 4 dígitos" },
-      mes2: { type: Type.NUMBER, description: "Mês 2 (1-12)" },
-      ano2: { type: Type.NUMBER, description: "Ano 2 com 4 dígitos" }
-    },
-    required: ["produto_nome", "mes1", "ano1", "mes2", "ano2"]
-  }
-};
-
-const buscarMargemTool = {
-  name: "buscar_margem",
-  description: "Busca a margem bruta (custo médio, preço de venda, margem percentual) de um produto ou fornecedor.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      nome: { type: Type.STRING, description: "Nome do produto ou fornecedor" }
-    },
-    required: ["nome"]
-  }
-};
-
-const relatorioReposicaoTool = {
-  name: "relatorio_reposicao",
-  description: "Gera o relatório matinal de reposição, análise de curva ABCD, risco de ruptura e compras recomendadas.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {}
-  }
-};
-
-const abrirChamadoTool = {
-  name: "abrir_chamado",
-  description: "Abre um ticket ou relata um problema de TI (ex: internet caiu, computador não liga).",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      descricao: { type: Type.STRING, description: "Descrição do problema" },
-      solicitante: { type: Type.STRING, description: "Nome de quem está solicitando" }
-    },
-    required: ["descricao"]
-  }
-};
-
-const statusChamadoTool = {
-  name: "status_chamado",
-  description: "Verifica o status de um ou mais chamados de TI.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      id_chamado: { type: Type.STRING, description: "ID do chamado (opcional)" }
+/* -------------------------------------------------------------------------- */
+/*  Ferramentas (Function Calling) — a IA decide sozinha o que chamar          */
+/* -------------------------------------------------------------------------- */
+const functionDeclarations = [
+  {
+    name: "relatorio_reposicao",
+    description: "Relatório de reposição de estoque / Curva ABCD. Retorna itens em risco de ruptura, itens em excesso (capital paralisado), pedidos automáticos classe A e pendências de aprovação. Use para perguntas sobre estoque, reposição, ruptura, curva ABCD, o que comprar hoje.",
+    parameters: { type: Type.OBJECT, properties: {} }
+  },
+  {
+    name: "historico_vendas",
+    description: "Histórico agregado de vendas dos últimos 24 meses com receita e volume por mês. Use para perguntas sobre vendas, receita, faturamento, tendência ou desempenho de um mês.",
+    parameters: { type: Type.OBJECT, properties: {} }
+  },
+  {
+    name: "analise_fornecedor",
+    description: "Analisa o desempenho e o estoque dos produtos de um fornecedor: total entrado, saldo, quebra (%) e alertas de ruptura. Use para perguntas sobre um fornecedor específico (ex: Tramontina, Siemens, WEG, Schneider, Legrand).",
+    parameters: {
+      type: Type.OBJECT,
+      properties: { nome_fornecedor: { type: Type.STRING, description: "Nome do fornecedor, ex: Tramontina" } },
+      required: ["nome_fornecedor"]
+    }
+  },
+  {
+    name: "participacao_grupo_fornecedor",
+    description: "Mostra a participação (compras por CNPJ) dentro de um grupo econômico de fornecedores e o total consolidado. Use para dependência de grupo, concentração de compras ou soma por grupo.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: { nome_grupo: { type: Type.STRING, description: "Nome do grupo, ex: Tramontina, WEG" } },
+      required: ["nome_grupo"]
+    }
+  },
+  {
+    name: "comparar_periodos",
+    description: "Compara as compras de um produto entre dois meses distintos e calcula a variação percentual.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        nome_produto: { type: Type.STRING, description: "Nome ou código do produto" },
+        mes1: { type: Type.NUMBER, description: "Mês inicial (1-12)" },
+        ano1: { type: Type.NUMBER, description: "Ano inicial (ex 2026)" },
+        mes2: { type: Type.NUMBER, description: "Mês final (1-12)" },
+        ano2: { type: Type.NUMBER, description: "Ano final (ex 2026)" }
+      },
+      required: ["nome_produto", "mes1", "ano1", "mes2", "ano2"]
+    }
+  },
+  {
+    name: "margem",
+    description: "Calcula a margem bruta (custo médio, preço de venda, margem em R$ e %) de um produto ou de um fornecedor.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        tipo: { type: Type.STRING, description: "'produto' ou 'fornecedor'" },
+        nome: { type: Type.STRING, description: "Nome/código do produto ou nome do fornecedor" }
+      },
+      required: ["tipo", "nome"]
+    }
+  },
+  {
+    name: "detalhes_produto",
+    description: "Detalhes cadastrais e de estoque de um produto: código, categoria, preço, lead time, MOQ, curva XYZ e saldo atual.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: { nome_ou_codigo: { type: Type.STRING, description: "Nome ou código do produto" } },
+      required: ["nome_ou_codigo"]
+    }
+  },
+  {
+    name: "status_chamado_ti",
+    description: "Consulta o status de chamados de TI (ITSM). Sem parâmetro retorna todos os chamados.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: { id_ou_texto: { type: Type.STRING, description: "ID do chamado (ex TI-002) ou texto de busca. Opcional." } }
+    }
+  },
+  {
+    name: "abrir_chamado_ti",
+    description: "Abre um novo chamado de TI para o usuário.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        descricao: { type: Type.STRING, description: "Descrição do problema" },
+        solicitante: { type: Type.STRING, description: "Nome do solicitante. Opcional." }
+      },
+      required: ["descricao"]
+    }
+  },
+  {
+    name: "estoque_epi",
+    description: "Consulta o estoque de EPIs (capacete, luva, óculos, botina) no almoxarifado e alerta de ruptura.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: { nome_epi: { type: Type.STRING, description: "Nome do EPI. Opcional (vazio = todos)." } }
+    }
+  },
+  {
+    name: "consumo_epi_funcionario",
+    description: "Relatório de consumo de EPIs por funcionário.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: { nome_funcionario: { type: Type.STRING, description: "Nome do funcionário. Opcional." } }
+    }
+  },
+  {
+    name: "buscar_politica",
+    description: "Busca na base de conhecimento interna políticas e regras da empresa: prazos/SLA de entrega, alçada financeira e aprovações, metodologia da curva ABCD, escalamento de chamados de TI, política de EPIs, política de fornecedores/grupos e cálculo de margem. Use para perguntas sobre 'regra', 'política', 'prazo', 'SLA', 'alçada', 'como funciona'.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: { consulta: { type: Type.STRING, description: "O tema/pergunta a buscar" } },
+      required: ["consulta"]
     }
   }
+];
+
+/* -------------------------------------------------------------------------- */
+/*  Execução das ferramentas                                                   */
+/* -------------------------------------------------------------------------- */
+const GRUPOS: Record<string, number> = {
+  tramontina: 1, siemens: 2, weg: 3, schneider: 4, legrand: 5
 };
 
-const estoqueEpiTool = {
-  name: "estoque_epi",
-  description: "Verifica o estoque, saldo ou ruptura de Equipamentos de Proteção Individual (EPIs).",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      nome_epi: { type: Type.STRING, description: "Nome do EPI (opcional)" }
-    }
-  }
-};
-
-const consumoEpiFuncionarioTool = {
-  name: "consumo_epi_funcionario",
-  description: "Lista os EPIs retirados/consumidos por um funcionário.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      funcionario_nome: { type: Type.STRING, description: "Nome do funcionário" }
-    },
-    required: ["funcionario_nome"]
-  }
-};
-
-const buscarDadosVendasTool = {
-  name: "buscar_dados_vendas",
-  description: "Busca o volume de vendas, faturamento ou histórico de vendas em um mês e ano específicos.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {}
-  }
-};
-
-// Handlers for DB Calls resolving names
-async function handleBuscarEstoqueFornecedor(args: any) {
-  const supplier = db.findSupplierByName(args.fornecedor_nome);
-  if (!supplier) return { error: `Fornecedor '${args.fornecedor_nome}' não encontrado.` };
-  let period = "";
-  if (args.ano_referencia && args.mes_referencia) {
-    period = `${args.ano_referencia}-${String(args.mes_referencia).padStart(2, '0')}`;
-  } else {
-    period = "2026-07"; // default
-  }
-  return db.queryEstoqueFornecedor(supplier.id, period);
+function norm(s: string) {
+  return (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
-async function handleParticipacaoFornecedor(args: any) {
-  const supplier = db.findSupplierByName(args.grupo_nome);
-  if (!supplier) return { error: `Grupo '${args.grupo_nome}' não encontrado.` };
-  let period = "";
-  if (args.ano_referencia && args.mes_referencia) {
-    period = `${args.ano_referencia}-${String(args.mes_referencia).padStart(2, '0')}`;
-  } else {
-    period = "2026-07"; // default
-  }
-  return db.queryParticipacaoFornecedor(supplier.grupo_id, period);
-}
+async function executeTool(name: string, args: any): Promise<any> {
+  try {
+    switch (name) {
+      case "relatorio_reposicao":
+        return db.getResumoReposicao();
 
-async function handleComparacaoPeriodos(args: any) {
-  const product = db.findProductByName(args.produto_nome);
-  if (!product) return { error: `Produto '${args.produto_nome}' não encontrado.` };
-  return db.queryComparacaoPeriodos(product.id, args.mes1, args.ano1, args.mes2, args.ano2);
-}
+      case "historico_vendas":
+        return db.queryHistoricoVendas();
 
-async function handleBuscarMargem(args: any) {
-  const product = db.findProductByName(args.nome);
-  if (product) return db.queryMargem('produto', product.id);
-  const supplier = db.findSupplierByName(args.nome);
-  if (supplier) return db.queryMargem('fornecedor', supplier.id);
-  return { error: `Item/Fornecedor '${args.nome}' não encontrado.` };
-}
-
-async function handleRelatorioReposicao(args: any) {
-  return db.getResumoReposicao();
-}
-
-async function handleAbrirChamado(args: any) {
-  const solicitante = args.solicitante || "Usuário do Chat";
-  const res = db.abrirChamado(solicitante, args.descricao);
-  console.log(`[ALERTA EXTERNO ENVIADO] E-mail e notificação push enviados para ti@empresa.com sobre o novo chamado: ${res.id}.`);
-  return res;
-}
-
-async function handleStatusChamado(args: any) {
-  return db.queryStatusChamado(args.id_chamado || "");
-}
-
-async function handleEstoqueEpi(args: any) {
-  return db.queryEstoqueEPI(args.nome_epi || "");
-}
-
-async function handleConsumoEpiFuncionario(args: any) {
-  return db.queryConsumoFuncionario(args.funcionario_nome || "");
-}
-
-async function handleBuscarDadosVendas(args: any) {
-  return db.queryHistoricoVendas();
-}
-
-// Map handlers
-const toolHandlers: Record<string, Function> = {
-  buscar_estoque_fornecedor: handleBuscarEstoqueFornecedor,
-  participacao_fornecedor: handleParticipacaoFornecedor,
-  comparacao_periodo: handleComparacaoPeriodos,
-  buscar_margem: handleBuscarMargem,
-  relatorio_reposicao: handleRelatorioReposicao,
-  abrir_chamado: handleAbrirChamado,
-  status_chamado: handleStatusChamado,
-  estoque_epi: handleEstoqueEpi,
-  consumo_epi_funcionario: handleConsumoEpiFuncionario,
-  buscar_dados_vendas: handleBuscarDadosVendas
-};
-
-export async function processarMensagemClara(message: string, history: any[], userProfile: string) {
-  let historyText = "Nenhum histórico anterior nesta sessão.";
-  if (history && history.length > 0) {
-    historyText = history.map(item => {
-      const isUser = item.role === "user";
-      return `${isUser ? "Usuário" : "Clara (Assistente)"}: ${item.text}`;
-    }).join("\n");
-  }
-
-  const isCompras = userProfile.toLowerCase() === "compras";
-
-  const systemInstruction = `Você é Clara, a assistente virtual e analítica da EletroMax Distribuidora, especialista em Supply Chain e Finanças.
-Sempre use as ferramentas disponíveis para consultar o banco de dados antes de responder.
-Baseie-se EXCLUSIVAMENTE nos dados retornados pelas ferramentas. Não invente números, produtos ou estoques.
-Se uma ferramenta retornar erro ou dados vazios, informe ao usuário que não encontrou os dados na base.
-O mês atual é Julho de 2026.
-O perfil de acesso do usuário é: ${userProfile}.
-
-Regras de Reposição (Curva ABCD):
-• Classe A: Manter 6 meses de estoque (Pedidos automáticos até R$ 50k; acima disso exige Assinatura da Diretoria).
-• Classe B: Manter 4 meses de estoque (Requer aprovação humana).
-• Classe C: Manter 3 meses de estoque (Requer aprovação humana).
-• Classe D: Manter 1 mês de estoque (Requer aprovação humana).
-
-Seja direta, profissional e formate a resposta com tabelas, marcadores e negritos para leitura dinâmica. Para análises de ruptura, faça a matemática clara considerando a meta da classe.
-Se um relatório de reposição requerer assinatura da diretoria, NÃO crie os pedidos, apenas exiba o alerta.
-
-Histórico Recente da Conversa:
-${historyText}`;
-
-  // Ferramentas permitidas de acordo com o perfil
-  const allowedTools = [
-    buscarEstoqueFornecedorTool,
-    participacaoFornecedorTool,
-    comparacaoPeriodoTool,
-    relatorioReposicaoTool,
-    abrirChamadoTool,
-    statusChamadoTool,
-    estoqueEpiTool,
-    consumoEpiFuncionarioTool,
-    buscarDadosVendasTool
-  ];
-
-  if (!isCompras) {
-    // Financeiro / Outros podem ver a margem
-    allowedTools.push(buscarMargemTool);
-  }
-
-  const chat = aiClient.chats.create({
-    model: "gemini-2.5-flash",
-    config: {
-      systemInstruction: systemInstruction,
-      tools: [{ functionDeclarations: allowedTools }]
-    }
-  });
-
-  let response = await chat.sendMessage({ message });
-
-  let ultimaDataBuscada: any = null; // Armazena o último dado pra compatibilidade com o retorno do frontend
-  let countTokens = 0;
-
-  while (response.functionCalls && response.functionCalls.length > 0) {
-    const functionResponses = [];
-
-    for (const call of response.functionCalls) {
-      console.log(`[ClaraChatService] IA decidiu chamar a função: ${call.name}`);
-      
-      const handler = toolHandlers[call.name];
-      let dbResult;
-      
-      if (handler) {
-         try {
-           dbResult = await handler(call.args);
-         } catch (error: any) {
-           dbResult = { error: `Erro na execução da função: ${error.message}` };
-         }
-      } else {
-         dbResult = { error: "Função não encontrada." };
+      case "analise_fornecedor": {
+        const f = db.findSupplierByName(args?.nome_fornecedor || "");
+        if (!f) return { erro: `Fornecedor '${args?.nome_fornecedor}' não encontrado.` };
+        return { fornecedor: f.nome_fantasia, itens: db.queryEstoqueFornecedor(f.id, "") };
       }
 
-      ultimaDataBuscada = dbResult; // Salva pra retornar
-
-      // Tratamento especial para o perfil de 'compras' não receber os dados de margem/lucro
-      if (isCompras && call.name === "relatorio_reposicao") {
-         dbResult = JSON.parse(JSON.stringify(dbResult, (key, value) => {
-            if (["valor_estimado_compra", "preco_venda", "custo_medio", "margem_valor", "margem_pct"].includes(key)) {
-              return undefined;
-            }
-            return value;
-         }));
-      }
-
-      functionResponses.push({
-        functionResponse: {
-          name: call.name,
-          response: dbResult
+      case "participacao_grupo_fornecedor": {
+        const key = norm(args?.nome_grupo || "");
+        let grupoId = 0;
+        for (const g of Object.keys(GRUPOS)) if (key.includes(g)) grupoId = GRUPOS[g];
+        if (!grupoId) {
+          const f = db.findSupplierByName(args?.nome_grupo || "");
+          grupoId = f?.grupo_id || 0;
         }
-      });
-    }
+        if (!grupoId) return { erro: `Grupo '${args?.nome_grupo}' não encontrado.` };
+        return db.queryParticipacaoFornecedor(grupoId, "");
+      }
 
-    response = await chat.sendMessage({ message: functionResponses });
-    countTokens += 150; // estimate of tool call tokens
+      case "comparar_periodos": {
+        const p = db.findProductByName(args?.nome_produto || "");
+        if (!p) return { erro: `Produto '${args?.nome_produto}' não encontrado.` };
+        return db.queryComparacaoPeriodos(p.id, Number(args.mes1), Number(args.ano1), Number(args.mes2), Number(args.ano2));
+      }
+
+      case "margem": {
+        const tipo = norm(args?.tipo).includes("fornec") ? "fornecedor" : "produto";
+        if (tipo === "produto") {
+          const p = db.findProductByName(args?.nome || "");
+          if (!p) return { erro: `Produto '${args?.nome}' não encontrado.` };
+          return db.queryMargem("produto", p.id);
+        } else {
+          const f = db.findSupplierByName(args?.nome || "");
+          if (!f) return { erro: `Fornecedor '${args?.nome}' não encontrado.` };
+          return db.queryMargem("fornecedor", f.id);
+        }
+      }
+
+      case "detalhes_produto": {
+        const p = db.findProductByName(args?.nome_ou_codigo || "");
+        if (!p) return { erro: `Produto '${args?.nome_ou_codigo}' não encontrado.` };
+        const saldo = db.estoque_atual.filter(e => e.produto_id === p.id).reduce((s, e) => s + e.saldo_quantidade, 0);
+        return { ...p, saldo_estoque_atual: saldo };
+      }
+
+      case "status_chamado_ti":
+        return db.queryStatusChamado(args?.id_ou_texto || "");
+
+      case "abrir_chamado_ti":
+        return db.abrirChamado(args?.solicitante || "Usuário do Chat", args?.descricao || "");
+
+      case "estoque_epi":
+        return db.queryEstoqueEPI(args?.nome_epi || undefined);
+
+      case "consumo_epi_funcionario":
+        return db.queryConsumoFuncionario(args?.nome_funcionario || undefined);
+
+      case "buscar_politica": {
+        const r = await searchKnowledge(args?.consulta || "", 3, true);
+        return r.length ? r.map(d => ({ titulo: d.titulo, conteudo: d.conteudo, fonte: d.fonte }))
+                        : { aviso: "Nenhuma política específica encontrada na base." };
+      }
+
+      default:
+        return { erro: `Ferramenta desconhecida: ${name}` };
+    }
+  } catch (e: any) {
+    return { erro: `Falha ao executar ${name}: ${e?.message || e}` };
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  System instruction                                                         */
+/* -------------------------------------------------------------------------- */
+function buildSystemInstruction(userProfile: string) {
+  return `${PERSONA_DIRETRIZES}
+
+CONTEXTO OPERACIONAL:
+- Data atual: Julho de 2026. Empresa: EletroMax Distribuidora.
+- Perfil de acesso do usuário: ${userProfile}.
+
+COMO AGIR (AGENTE AUTÔNOMO):
+- Você é um agente autônomo. Para QUALQUER pergunta sobre dados (estoque, vendas, fornecedores, margem, chamados, EPIs, políticas), CHAME as ferramentas disponíveis para obter os números REAIS antes de responder. Nunca invente dados.
+- Você pode chamar mais de uma ferramenta, inclusive em sequência, para montar uma resposta completa.
+- Após obter os dados, responda de forma humanizada, clara e natural (como o ChatGPT/Gemini): frase de abertura curta + dados organizados em **negrito**, listas ou tabelas Markdown + um insight ou próximo passo proativo.
+- Para saudações ou conversa leve, responda de forma cordial e natural, sem chamar ferramentas, e ofereça ajuda com Supply Chain.
+- Se a informação realmente não existir nas ferramentas, diga isso com transparência e sugira o que você consegue responder.
+- Responda sempre em português do Brasil, de forma objetiva e sem enrolação.`;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Loop agêntico principal                                                    */
+/* -------------------------------------------------------------------------- */
+export async function processarMensagemClara(message: string, history: any[], userProfile: string) {
+  const ai = getAiClient();
+
+  const contents: any[] = [];
+  if (Array.isArray(history)) {
+    for (const h of history) {
+      const text = (h?.text ?? h?.content ?? "").toString();
+      if (!text) continue;
+      contents.push({ role: h?.role === "user" ? "user" : "model", parts: [{ text }] });
+    }
+  }
+  contents.push({ role: "user", parts: [{ text: message }] });
+
+  const config = {
+    systemInstruction: buildSystemInstruction(userProfile),
+    temperature: 0.4,
+    tools: [{ functionDeclarations }]
+  };
+
+  let finalText = "";
+  let collectedData: any = null;
+
+  const run = async () => {
+    for (let step = 0; step < 6; step++) {
+      const response: any = await ai.models.generateContent({ model: MODEL, contents, config });
+
+      const calls = response.functionCalls;
+      if (calls && calls.length > 0) {
+        // registra a jogada do modelo (functionCall)
+        const modelContent = response.candidates?.[0]?.content;
+        if (modelContent) contents.push(modelContent);
+
+        const responseParts: any[] = [];
+        for (const call of calls) {
+          const result = await executeTool(call.name, call.args || {});
+          collectedData = result;
+          responseParts.push({ functionResponse: { name: call.name, response: { result } } });
+        }
+        contents.push({ role: "user", parts: responseParts });
+        continue;
+      }
+
+      finalText = (response.text || "").trim();
+      return;
+    }
+    // Excedeu o número de passos — pede um fechamento textual
+    const closing: any = await ai.models.generateContent({
+      model: MODEL,
+      contents: [...contents, { role: "user", parts: [{ text: "Resuma a resposta final para o usuário com os dados já coletados." }] }],
+      config: { systemInstruction: config.systemInstruction, temperature: 0.4 }
+    });
+    finalText = (closing.text || "").trim();
+  };
+
+  // Blindagem de tempo: nunca deixa a requisição travar
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Tempo limite ao gerar resposta")), 45000)
+  );
+
+  try {
+    await Promise.race([run(), timeout]);
+  } catch (error: any) {
+    console.error("❌ Erro no ClaraChatService:", error?.message || error);
+    if (!finalText) throw error;
   }
 
-  const finalTokens = countTokens + Math.ceil((response.text || "").length / 4);
+  if (!finalText) {
+    finalText = "Não consegui gerar uma resposta agora. Pode reformular a pergunta?";
+  }
 
-  return { text: response.text || "Sem resposta.", data: ultimaDataBuscada, tokens: finalTokens };
+  const tokensEstimados = Math.ceil(finalText.length / 4) + 150;
+  return { text: finalText, data: collectedData, tokens: tokensEstimados };
 }

@@ -1,17 +1,41 @@
-// geminiService.cjs
-require('dotenv').config();
+const path = require('path');
+
+// 1. Carrega o .env usando caminho absoluto garantido
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+
+// 2. Força o DNS do Node.js a priorizar IPv4 no processo
+const dns = require('dns');
+if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder('ipv4first');
+}
+
+// 3. Força o undici (fetch interno do Node.js 18) a usar SOMENTE IPv4
+//    Isso corrige o "fetch failed" causado pelo undici tentando IPv6
+try {
+    const { setGlobalDispatcher, Agent } = require('undici');
+    setGlobalDispatcher(new Agent({ connect: { family: 4 } }));
+    console.log('[DNS] ✅ undici dispatcher configurado para IPv4 exclusivo.');
+} catch (e) {
+    console.warn('[DNS] ⚠️ undici não disponível, continuando sem patch IPv4:', e.message);
+}
+
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Inicia o SDK com a chave do .env
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Captura e valida a chave de API
+const apiKey = process.env.GEMINI_API_KEY;
 
-const SYSTEM_PROMPT = `Você é Clara, um agente de Supply Chain e Analista Financeira da EletroMax. 
-Responda APENAS com base nos dados fornecidos pelo sistema via Function Calling. 
-Se perguntarem algo fora de compras, estoque ou vendas, responda estritamente: 
+if (!apiKey || apiKey.trim() === '') {
+    console.error("❌ ERRO: A variável GEMINI_API_KEY está vazia ou não foi encontrada no .env!");
+}
+
+const genAI = new GoogleGenerativeAI(apiKey || "");
+
+const SYSTEM_PROMPT = `Você é Clara, um agente de Supply Chain e Analista Financeira da EletroMax.
+Responda APENAS com base nos dados reais fornecidos pelo sistema via ferramentas (Tools).
+Se a informação não estiver disponível nas ferramentas ou no contexto, responda estritamente:
 'Desculpe, não tenho dados para responder a essa pergunta no momento.'
-Não alucine números. Se identificar intenção de vendas/financeiro, assuma postura de Analista Financeira e traga os números exatos.`;
+Não invente ou adivinhe números. Assuma postura profissional, objetiva e transparente.`;
 
-// Declaração da ferramenta (Function Calling)
 const tools = [
   {
     functionDeclarations: [
@@ -31,36 +55,47 @@ const tools = [
   }
 ];
 
-// Mock da função real (No futuro conectaremos ao seu BD/ERP)
 function executeBuscarDadosVendas(mes, ano) {
-    console.log(`[Tool Executed] Buscando vendas para: ${mes}/${ano}`);
-    return { receita: "R$ 600k", volume_unidades: 6000, periodo: `${mes}/${ano}`, status: "Fechado" };
+    console.log(`[Tool] Executando buscar_dados_vendas para ${mes}/${ano}`);
+    return { receita: "R$ 600.000,00", volume_unidades: 6000, periodo: `${mes}/${ano}`, status: "Fechado" };
 }
 
 async function processarChatGemini(mensagemUsuario, historicoFront) {
     try {
+        if (!apiKey || apiKey.trim() === '') {
+            throw new Error("GEMINI_API_KEY ausente no arquivo .env do servidor.");
+        }
+
         const model = genAI.getGenerativeModel({ 
             model: "gemini-2.5-flash",
             tools: tools,
-            systemInstruction: SYSTEM_PROMPT
+            systemInstruction: SYSTEM_PROMPT,
+            generationConfig: {
+                temperature: 0.1
+            }
         });
 
-        // Formata o histórico do front-end para o padrão do Gemini
-        let formatadoParaGemini = [];
+        // Validação e Limpeza de Histórico
+        let validHistory = [];
         if (historicoFront && Array.isArray(historicoFront)) {
-            formatadoParaGemini = historicoFront.map(msg => ({
-                role: msg.role === 'user' ? 'user' : 'model',
-                parts: [{ text: msg.text }]
-            }));
+            for (const msg of historicoFront) {
+                if (validHistory.length === 0 && msg.role !== 'user') continue;
+                if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === msg.role) continue;
+                
+                validHistory.push({
+                    role: msg.role === 'user' ? 'user' : 'model',
+                    parts: [{ text: msg.text || "" }]
+                });
+            }
+            if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
+                validHistory.pop();
+            }
         }
 
-        const chat = model.startChat({ history: formatadoParaGemini });
-
-        // Envia a mensagem do usuário
+        const chat = model.startChat({ history: validHistory });
         let result = await chat.sendMessage(mensagemUsuario);
         let response = result.response;
 
-        // Verifica se a IA pediu para chamar a função (Function Calling)
         if (response.functionCalls && response.functionCalls.length > 0) {
             const call = response.functionCalls[0];
             let apiResponse = {};
@@ -69,7 +104,6 @@ async function processarChatGemini(mensagemUsuario, historicoFront) {
                 apiResponse = executeBuscarDadosVendas(call.args.mes, call.args.ano);
             }
 
-            // Devolve os dados reais para a IA montar a frase
             result = await chat.sendMessage([{
                 functionResponse: {
                     name: call.name,
@@ -79,7 +113,6 @@ async function processarChatGemini(mensagemUsuario, historicoFront) {
             response = result.response;
         }
 
-        // Retorna o texto final gerado pela Clara
         return {
             text: response.text(),
             intent: "ia_dinamica",
@@ -88,7 +121,7 @@ async function processarChatGemini(mensagemUsuario, historicoFront) {
 
     } catch (error) {
         console.error("❌ ERRO NO GEMINI SERVICE:", error);
-        throw error; // Repassa o erro para o app.cjs capturar
+        throw error;
     }
 }
 

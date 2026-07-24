@@ -9,6 +9,11 @@ const { processarChatGemini } = geminiService;
 
 dotenv.config();
 
+import dns from "dns";
+if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder('ipv4first');
+}
+
 // Ensure Gemini API client is initialized only when needed (lazy initialization)
 let aiClient: GoogleGenAI | null = null;
 
@@ -84,36 +89,54 @@ const handleOrchestratedChat = async (req: Request, res: Response) => {
 app.post("/api/consulta", handleOrchestratedChat);
 app.post("/api/clara/chat", async (req: Request, res: Response) => {
     try {
-        const { question, historico, profile } = req.body;
+        const { question, historico, history, profile, perfil } = req.body;
         const mensagemUser = question || req.body.mensagem;
+        const userProfile = profile || perfil || "compras";
 
-        // 1. HARD-STOP (Trava Financeira) ANTES de bater na IA
+        if (!mensagemUser) {
+          res.status(400).json({ error: "Parâmetro 'question' ou 'mensagem' é obrigatório." });
+          return;
+        }
+
+        // 1. Trava Financeira Automática (Hard-Stop)
         if (mensagemUser.toLowerCase().includes('50000') || mensagemUser.toLowerCase().includes('50k')) {
             res.json({ 
                 text: "⚠️ SISTEMA: Pedido de compra bloqueado. O valor excede a alçada financeira (R$ 50k). Status: PENDENTE DE ASSINATURA DA DIRETORIA.",
-                intent: "trava_seguranca"
+                intent: "trava_seguranca",
+                custoBrl: 0,
+                tokensUsados: 0
             });
             return;
         }
 
-        // 2. Chama o nosso novo serviço isolado da IA
-        const iaResponse = await processarChatGemini(mensagemUser, historico);
+        // 2. Execução da IA rápida através do pipeline direto com contexto RAG
+        const userHistory = history || historico || [];
+        const { text, data, tokens } = await processarMensagemClara(mensagemUser, userHistory, userProfile);
 
-        // 3. Devolve para o Frontend
+        const precoPorMilTokensUsd = 0.00015;
+        const taxaCambioUsdToBrl = 5.60;
+        const custoUsd = ((tokens || 100) / 1000) * precoPorMilTokensUsd;
+        const custoBrl = parseFloat((custoUsd * taxaCambioUsdToBrl).toFixed(6));
+
         res.json({
-            text: iaResponse.text,
-            intent: iaResponse.intent,
-            custoBrl: 0.05,
-            tokensUsados: 500
+            text: text,
+            resposta_clara: text,
+            data: data,
+            intent: "ia_dinamica",
+            custoBrl: custoBrl || 0.05,
+            tokensUsados: tokens || 500,
+            sucesso: true
         });
         return;
+
     } catch (error: any) {
         console.error("❌ ERRO NA ROTA /api/clara/chat:", error);
-        // Devolvemos o erro exato pro front para você ver na tela sem precisar do terminal
-        res.status(500).json({ 
-            error: true, 
-            text: "Erro no servidor da IA: " + error.message,
-            intent: "erro_backend"
+        
+        res.json({ 
+            text: "Ops, tive um problema técnico ao processar sua consulta. Por favor, tente novamente em instantes.\n\n*Detalhe técnico: " + (error.message || "Timeout de comunicação") + "*",
+            intent: "erro_servidor",
+            custoBrl: 0,
+            tokensUsados: 0
         });
         return;
     }
@@ -266,6 +289,59 @@ app.get("/api/historico-vendas", (req, res) => {
     historico: historicoComDetalhes
   });
 });
+
+// Middleware de Autenticação Segura para Endpoints de Administração RAG
+const requireAdminAuth = (req: Request, res: Response, next: any) => {
+  const adminKey = process.env.ADMIN_API_KEY || "emptum_admin_secret";
+  const providedKey = req.headers["x-admin-key"] || req.query.admin_key || req.body?.admin_key;
+
+  if (!providedKey || providedKey !== adminKey) {
+    res.status(401).json({
+      sucesso: false,
+      erro: "Acesso Negado: Chave administrativa ('x-admin-key') inválida ou ausente."
+    });
+    return;
+  }
+  next();
+};
+
+import { insertDocument, searchKnowledge } from "./src/services/ragService.js";
+
+// Endpoint de Administração: Buscar ou testar a base de conhecimento RAG
+app.get("/api/admin/docs", requireAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const query = String(req.query.q || "politica");
+    const resultados = await searchKnowledge(query, 10);
+    res.json({
+      sucesso: true,
+      termo_busca: query,
+      total_encontrados: resultados.length,
+      documentos: resultados
+    });
+  } catch (error: any) {
+    res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
+// Endpoint de Administração: Inserir novo documento de conhecimento no RAG
+app.post("/api/admin/docs/insert", requireAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { titulo, conteudo, fonte } = req.body;
+    if (!titulo || !conteudo) {
+      res.status(400).json({ sucesso: false, erro: "Parâmetros 'titulo' e 'conteudo' são obrigatórios." });
+      return;
+    }
+    const docId = await insertDocument(titulo, conteudo, fonte || "Manual Administrativo");
+    res.json({
+      sucesso: true,
+      mensagem: "Documento vetorizado e inserido na base RAG com sucesso!",
+      docId
+    });
+  } catch (error: any) {
+    res.status(500).json({ sucesso: false, erro: error.message });
+  }
+});
+
 
 // START EXPRESS SERVER WITH VITE MIDDLEWARE OR STATIC FILES
 async function startServer() {
